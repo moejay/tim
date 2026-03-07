@@ -1,0 +1,21 @@
+[package]
+name = "cannon-poc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cannon"
+path = "src/main.rs"
+
+[dependencies]
+bevy = { version = "0.16", default-features = false }
+bevy_ratatui = "0.9"
+crossterm = "0.28"
+ratatui = "0.29"
+
+[[bin]]
+name = "demos"
+path = "src/demos.rs"
+
+[profile.release]
+opt-level = 3
