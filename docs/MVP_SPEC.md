@@ -10,6 +10,61 @@ path to that loop working end-to-end.
 
 ---
 
+## Terminal Requirements
+
+The game renders a 640x360 pixel image every frame via `viuer`, which auto-detects
+the best graphics protocol the terminal supports. Visual fidelity depends entirely
+on which protocol is available.
+
+### Full pixel fidelity (recommended)
+
+| Terminal | Protocol | Notes |
+|---|---|---|
+| **WezTerm** | Kitty Graphics Protocol | Primary dev/test target |
+| **kitty** | Kitty Graphics Protocol | Fastest; native support |
+| **Ghostty** | Kitty Graphics Protocol | Full pixel |
+| **foot** | Sixel | Full pixel |
+| **xterm** (with `+sixel`) | Sixel | Must be built with Sixel support |
+| **iTerm2** | iTerm2 inline images | macOS |
+
+### Degraded experience (half-block fallback)
+
+| Terminal | Issue |
+|---|---|
+| **Alacritty** | No pixel graphics protocol support. Falls back to Unicode half-block characters (`▀▄█`). Resolution drops to ~80x45 pseudo-pixels in an 80-column terminal — 32px grid cells become ~4 chars wide. Parts are recognizable but blocky; anti-aliased effects are lost. |
+| **Windows Terminal** | Same half-block fallback. |
+| **Basic/legacy terminals** | Any terminal without Kitty/Sixel/iTerm2 support. |
+
+### Untested
+
+| Terminal | Notes |
+|---|---|
+| **tmux** | Sixel passthrough works in recent versions (`set -g allow-passthrough on`) but frame rate and flicker are untested. |
+| **screen** | Unlikely to work well with pixel protocols. |
+| **SSH sessions** | Depends on the local terminal, not the remote. Should work if the local terminal supports Kitty/Sixel. |
+
+### Startup protocol detection
+
+On launch, the game prints which `viuer` protocol was selected before entering
+the game loop:
+
+```
+TIM2 Terminal — Protocol: Kitty Graphics
+```
+
+If the detected protocol is half-block, an additional warning is shown:
+
+```
+WARNING: Your terminal does not support Kitty/Sixel/iTerm2 graphics.
+         Rendering will use Unicode half-block fallback (lower fidelity).
+         For the best experience, use WezTerm, kitty, or Ghostty.
+         Press any key to continue, or 'q' to quit.
+```
+
+This lets the player make an informed choice before committing to a session.
+
+---
+
 ## Stack (inherits from sixel-poc, no changes)
 
 | Layer | Choice |
@@ -45,29 +100,33 @@ path to that loop working end-to-end.
 
 ---
 
-## Grid System
+## Placement System
 
-Parts snap to a **32x32 pixel grid** on the playfield.
+Parts are placed at **free pixel coordinates** on the playfield. No grid snapping.
 
-- Grid columns: 512 / 32 = **16 cols** (0–15)
-- Grid rows:    360 / 32 = **11 rows** (0–10, last row is partial — use 0–10)
-- A cursor occupies one grid cell. Parts may span multiple cells (stored as
-  top-left cell + size in cells).
-- Pixel position of grid cell (col, row): `(col * 32, row * 32)`
-- Physics runs in pixel space. Grid is placement-only.
+- Parts store position as `(x: f32, y: f32)` — top-left corner in pixel space.
+- The cursor is a crosshair at `(f32, f32)` pixel coordinates.
+- Cursor moves in 4px steps (normal) or 16px steps (Shift / fast).
+- Parts are placed centered on the cursor position.
+- **Overlap rejection:** parts cannot overlap. Placement and movement are rejected
+  if the new position would cause an AABB overlap with any existing part.
+- Physics runs in the same pixel coordinate space — no conversion needed.
 
 ---
 
 ## Vim-style Input Modes
 
-The game has four modes. Current mode is always shown in the HUD.
+The game has five modes. Current mode is always shown in the HUD.
 
 ```
 NORMAL --> [p]       --> PLACE
+NORMAL --> [e]       --> EDIT (on part under cursor)
 NORMAL --> [Space]   --> RUN
 RUN    --> [Esc]     --> NORMAL
 PLACE  --> [Esc]     --> NORMAL
 PLACE  --> [Enter]   --> NORMAL (places part)
+EDIT   --> [Esc]     --> NORMAL
+EDIT   --> [Enter]   --> NORMAL
 NORMAL --> [q]       --> quit
 ```
 
@@ -77,9 +136,12 @@ Navigate the playfield cursor and manage placed parts.
 
 | Key | Action |
 |---|---|
-| `h` / `l` | cursor left / right |
-| `j` / `k` | cursor down / up |
+| `h` / `l` | cursor left / right (4px) |
+| `j` / `k` | cursor down / up (4px) |
+| `H` / `L` | cursor left / right fast (16px) |
+| `J` / `K` | cursor down / up fast (16px) |
 | `p` | enter PLACE mode |
+| `e` | enter EDIT mode (part under cursor) |
 | `Space` | start simulation (enter RUN mode) |
 | `x` | delete part under cursor |
 | `f` | flip part under cursor (horizontal mirror) |
@@ -89,19 +151,39 @@ Navigate the playfield cursor and manage placed parts.
 
 ### PLACE mode
 
-Select a part from the bin, move cursor to target cell, confirm.
+Select a part from the bin, move cursor to target position, confirm.
 
 Entering PLACE mode auto-focuses the first part in the bin. The bin highlights
-the selected part.
+the selected part. A ghost outline of the selected part is shown centered on
+the cursor. Placement is rejected if it would overlap an existing part.
 
 | Key | Action |
 |---|---|
-| `h` / `l` | cursor left / right on playfield |
-| `j` / `k` | cursor down / up on playfield |
+| `h` / `l` | cursor left / right (4px) |
+| `j` / `k` | cursor down / up (4px) |
+| `H` / `L` | cursor left / right fast (16px) |
 | `J` / `K` | scroll bin selection down / up |
 | `1`–`5` | jump directly to bin slot 1–5 |
 | `Enter` | place selected part at cursor; return to NORMAL |
 | `Esc` | cancel; return to NORMAL |
+
+### EDIT mode
+
+Move and manipulate a placed part in-place. Entered by pressing `e` in NORMAL
+mode with the cursor over a non-fixed part. An undo snapshot is taken on entry.
+The part is highlighted with a pulsing green outline.
+
+Movement is rejected if it would cause overlap with another part.
+
+| Key | Action |
+|---|---|
+| `h` / `l` | move part left / right (4px) |
+| `j` / `k` | move part down / up (4px) |
+| `H` / `L` | move part left / right fast (16px) |
+| `J` / `K` | move part down / up fast (16px) |
+| `f` | flip part |
+| `x` | delete part (returns to bin) |
+| `Esc` or `Enter` | done editing; return to NORMAL |
 
 ### RUN mode
 
@@ -120,39 +202,39 @@ puzzle.
 
 ### 1. Ball
 
-- Visual: anti-aliased sphere with specular highlight (from sixel-poc cannon.rs)
+- Visual: anti-aliased sphere with specular highlight and shading
 - Physics: point mass, gravity, elastic bounce off walls and surfaces
-- Size: 1x1 grid cell (32px diameter, 16px radius)
+- Size: 28x28 px (14px radius)
 - Gravity response: always falls
 - Properties: `pos: (f32, f32)`, `vel: (f32, f32)`, `active: bool`
 
 ### 2. Ramp (Incline)
 
-- Visual: filled triangle / diagonal line across a grid cell
+- Visual: filled triangle
 - Physics: acts as a one-sided sloped surface; ball slides down and deflects
-- Size: 2x1 grid cells (64x32 px)
-- Variants: slope-right (/) or slope-left (\) — toggled with `f` in NORMAL mode
+- Size: 64x32 px
+- Variants: slope-right (/) or slope-left (\) — toggled with `f`
 - Collision: reflect ball velocity about the surface normal
 
 ### 3. Wall (Flat Surface)
 
-- Visual: solid filled rectangle
+- Visual: solid filled rectangle with highlight edges
 - Physics: static rigid surface; ball bounces off all sides
-- Size: resizable in 1-cell increments, default 2x1 (horizontal plank)
-- Flip: `f` rotates between horizontal and vertical
+- Size: default 64x32 px (horizontal plank)
+- Flip: `f` swaps width and height (horizontal ↔ vertical)
 
 ### 4. Basket (Goal)
 
 - Visual: open-top U shape (three sides of a rectangle)
 - Physics: ball entering the basket opening triggers win condition
-- Size: 2x2 grid cells
+- Size: 64x64 px
 - Win condition: ball center is inside basket bounds and vel.y > 0 (falling in)
 
 ### 5. Cannon
 
-- Visual: body rectangle + angled barrel (from sixel-poc cannon.rs, adapted)
+- Visual: body rectangle + angled barrel + wheels
 - Physics: fires a ball at simulation start with configured angle and power
-- Size: 3x2 grid cells
+- Size: 96x64 px
 - Properties: `angle_deg: f32`, `power: f32`
 - Firing: on RUN start, spawns a Ball entity at barrel tip with computed velocity
 - The player does not place a separate Ball when using the Cannon — it spawns one
@@ -165,17 +247,18 @@ puzzle.
 ```rust
 struct Part {
     kind:    PartKind,
-    col:     u8,        // grid column of top-left
-    row:     u8,        // grid row of top-left
+    x:       f32,        // pixel x of top-left
+    y:       f32,        // pixel y of top-left
     flipped: bool,
+    fixed:   bool,       // immovable puzzle fixture
 }
 
 enum PartKind {
     Ball,
-    Ramp,
-    Wall { w_cells: u8, h_cells: u8 },
-    Basket,
-    Cannon { angle_deg: f32, power: f32 },
+    Ramp,                                    // 64x32 px
+    Wall { width: f32, height: f32 },        // default 64x32 px
+    Basket,                                  // 64x64 px
+    Cannon { angle_deg: f32, power: f32 },   // 96x64 px
 }
 
 struct SimBall {
@@ -187,18 +270,21 @@ struct SimBall {
 enum Mode {
     Normal,
     Place { bin_idx: usize },
+    Edit  { part_idx: usize },
     Run,
 }
 
 struct GameState {
     parts:      Vec<Part>,
-    ball:       SimBall,          // live ball during Run mode
+    ball:       SimBall,            // live ball during Run mode
     mode:       Mode,
-    cursor:     (u8, u8),         // grid (col, row)
-    undo_stack: Vec<Vec<Part>>,   // snapshots for undo
+    cursor:     (f32, f32),         // pixel (x, y)
+    undo_stack: Vec<Vec<Part>>,     // snapshots for undo
     won:        bool,
     frame:      u64,
     elapsed:    f32,
+    bin_items:  Vec<BinItem>,
+    show_help:  bool,
 }
 ```
 
@@ -249,10 +335,10 @@ ball.pos.y += ball.vel.y * dt;
 Each frame:
 
 1. Clear `RgbaImage` (640x360) to background `[10, 10, 14]`
-2. Draw playfield background (subtle 32px grid lines, dim)
-3. Draw parts bin panel background `[18, 18, 24]`
-4. For each `Part` in `state.parts`: call the part's draw function
-5. Draw cursor (if not RUN mode): glowing cell outline at cursor position
+2. Draw parts bin panel background `[18, 18, 24]`
+3. For each `Part` in `state.parts`: call the part's draw function
+4. Draw EDIT mode highlight (pulsing green outline) if applicable
+5. Draw cursor crosshair (if not RUN or EDIT mode)
 6. Draw live ball (if RUN mode and ball active)
 7. Draw win overlay if `state.won`
 8. Transmit via `viuer`
@@ -260,9 +346,9 @@ Each frame:
 
 ### Cursor Rendering
 
-A 32x32 cell outline with a pulsing glow. Color:
+A crosshair with a gap in the center (4 short line segments). Pulsing alpha.
 - NORMAL: cyan
-- PLACE: yellow (indicates snapping target)
+- PLACE: yellow, with ghost outline of selected part centered on cursor
 
 ### Parts Bin Rendering
 
@@ -282,7 +368,7 @@ slot 4: Cannon   [key: 5]
 
 ### HUD Text (2 rows below image)
 
-Row 1: `MODE: NORMAL | cursor: (col, row) | parts placed: N`
+Row 1: `MODE: NORMAL | cursor: (x, y) | parts: N | frame: N`
 Row 2: context-sensitive key hints for current mode
 
 ---
@@ -294,17 +380,16 @@ To avoid building a puzzle loader for the MVP, one puzzle is hardcoded:
 **Goal:** "Get the ball into the basket"
 
 **Fixed (immovable) parts:**
-- Cannon at (1, 5) facing right, angle -30 deg, power 600 px/s
-- Basket at (12, 7)
+- Cannon at (32, 160) facing right, angle -30 deg, power 600 px/s
+- Basket at (384, 224)
 
 **Player's inventory (parts bin):**
 - 1x Ramp
-- 1x Wall
-- 1x Wall
+- 2x Wall (64x32 px)
 
 **Winning sequence (one valid solution):**
-- Place Wall at ~(7, 4) to redirect ball downward
-- Place Ramp at ~(10, 6) to guide ball into basket
+- Place Wall at ~(224, 128) to redirect ball downward
+- Place Ramp at ~(320, 192) to guide ball into basket
 
 This gives the player 3 parts to work with, 2 of which are needed, 1 is a decoy.
 
