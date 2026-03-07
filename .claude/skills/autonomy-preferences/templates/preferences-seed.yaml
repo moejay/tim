@@ -1,0 +1,23 @@
+version: 1.0.0
+created: "{{date}}"
+
+# Overall preference (applies unless overridden per-category)
+# Options: ask | suggest-then-proceed | autonomous
+default_mode: "ask"
+
+# Category-specific overrides (null = use default_mode)
+# Set a specific mode to override the default for that category
+categories:
+  # System design, component boundaries, data flow patterns
+  architectural: null
+  # API design, interface contracts, naming conventions
+  design: null
+  # Library choices, implementation approaches, performance trade-offs
+  technical: null
+  # User interface and experience decisions
+  ui_ux: null
+  # Git workflow, branching strategy, release decisions
+  process: null
+
+# User's reasoning for their preference (captured during onboarding)
+reasoning: ""
