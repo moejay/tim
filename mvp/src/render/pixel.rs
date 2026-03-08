@@ -1,6 +1,6 @@
 use anyhow::Result;
 use image::{DynamicImage, Rgba, RgbaImage};
-use log::warn;
+use log::{warn, debug};
 use std::io::Write;
 
 use crossterm::{cursor, execute, style, terminal};
@@ -325,9 +325,30 @@ impl Renderer for PixelRenderer {
         }
 
         // 13. Transmit image via viuer
+        //
+        // Race condition: viuer's Kitty Graphics Protocol reads stdin for the
+        // terminal's acknowledgement response. crossterm also reads stdin for
+        // keyboard input. If a key press arrives between viuer sending the
+        // graphics command and reading the response, viuer gets the key mixed
+        // into its response parse and returns an error like:
+        //   "Kitty response: [Char(' '), UnknownEscSeq(['[', '0', 'n'])]"
+        //
+        // This is non-fatal — the image was already transmitted and displayed.
+        // We catch these errors and continue.
         execute!(std::io::stdout(), cursor::MoveTo(0, 0))?;
         let dyn_img = DynamicImage::ImageRgba8(self.img.clone());
-        viuer::print(&dyn_img, &self.viuer_config)?;
+        match viuer::print(&dyn_img, &self.viuer_config) {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = format!("{}", e);
+                if msg.contains("Kitty response") || msg.contains("UnknownEscSeq") {
+                    debug!("viuer Kitty response race (non-fatal, frame {}): {}", state.frame, msg);
+                } else {
+                    warn!("viuer error (frame {}): {}", state.frame, msg);
+                    return Err(e.into());
+                }
+            }
+        }
 
         // 14. Write HUD text via crossterm
         let mut stdout = std::io::stdout();
