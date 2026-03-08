@@ -185,6 +185,91 @@ Phrase-based triggers assume you'll narrate your thinking. You often just do wit
 
 ---
 
+#### `feature-planner`
+> Analyze a feature spec and produce a detailed implementation plan with tasks, dependencies, and risks
+
+**Phrase triggers** (user or Claude says):
+  - "plan this feature"
+  - "break down spec"
+  - "implementation plan for"
+  - "what tasks do we need"
+
+**Action triggers** (Claude is silently doing this):
+  - About to implement a feature from a spec in `docs/specs/`
+  - Starting Phase 1 of the SDLC pipeline
+
+**How to invoke:** Read `.claude/skills/feature-planner/SKILL.md` and follow its instructions immediately.
+
+---
+
+#### `feature-designer`
+> Produce a technical design from an implementation plan — types, traits, modules, rendering integration
+
+**Phrase triggers** (user or Claude says):
+  - "design this feature"
+  - "technical design for"
+  - "define the interfaces"
+  - "how should we structure"
+
+**Action triggers** (Claude is silently doing this):
+  - Implementation plan exists and is ready for design
+  - Starting Phase 2 of the SDLC pipeline
+
+**How to invoke:** Read `.claude/skills/feature-designer/SKILL.md` and follow its instructions immediately.
+
+---
+
+#### `feature-developer`
+> Implement code from a technical design — write Rust, compile, integrate with game loop
+
+**Phrase triggers** (user or Claude says):
+  - "implement this"
+  - "develop this feature"
+  - "write the code for"
+  - "build from design"
+
+**Action triggers** (Claude is silently doing this):
+  - Technical design exists and is ready for implementation
+  - Starting Phase 3 of the SDLC pipeline
+
+**How to invoke:** Read `.claude/skills/feature-developer/SKILL.md` and follow its instructions immediately.
+
+---
+
+#### `feature-tester`
+> Write and run tests for implemented features — unit, integration, physics property tests
+
+**Phrase triggers** (user or Claude says):
+  - "test this feature"
+  - "write tests for"
+  - "verify the implementation"
+  - "add test coverage"
+
+**Action triggers** (Claude is silently doing this):
+  - Feature implementation is complete and compiles
+  - Starting Phase 4 of the SDLC pipeline
+
+**How to invoke:** Read `.claude/skills/feature-tester/SKILL.md` and follow its instructions immediately.
+
+---
+
+#### `feature-orchestrator`
+> Run the full SDLC pipeline for a feature: plan → design → develop → test
+
+**Phrase triggers** (user or Claude says):
+  - "implement spec"
+  - "full pipeline for"
+  - "orchestrate feature"
+  - "end to end for spec"
+
+**Action triggers** (Claude is silently doing this):
+  - User asks to implement an entire feature from a spec
+  - Multiple SDLC phases need to be coordinated
+
+**How to invoke:** Read `.claude/skills/feature-orchestrator/SKILL.md` and follow its instructions immediately.
+
+---
+
 ### Workflow Checkpoints
 
 Run these internal checks at each stage — no user prompt needed:
@@ -224,6 +309,23 @@ Run these internal checks at each stage — no user prompt needed:
 - [ ] Did I make any design choices worth documenting? (even silent ones) → `record-architectural-decision`
 - [ ] Am I about to guess or proceed without clear guidance? → `surface-gap`
 - [ ] Did I encounter anything that should update existing skill guidance? → `update-skill`
+
+### SDLC Pipeline (for feature work from specs)
+
+When implementing features from `docs/specs/`, use the SDLC pipeline:
+
+```
+feature-orchestrator
+  ├── feature-planner   → docs/plans/[spec]-[name].md
+  ├── feature-designer  → docs/designs/[spec]-[name].md
+  ├── feature-developer → mvp/src/ code changes
+  └── feature-tester    → mvp/src/ + mvp/tests/ test code
+```
+
+Each phase has quality gates. The orchestrator manages handoffs.
+Use individual skills when you only need one phase (e.g., just planning, just testing).
+
+---
 
 If the answer to any is "yes" — invoke the skill before marking the task done.
 If the answer is "no" or "not applicable" — note why briefly and move on.
