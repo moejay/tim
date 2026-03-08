@@ -2,7 +2,7 @@
 
 This document describes the technology stack chosen to build the terminal-based recreation of
 The Incredible Machine 2 (TIM2). It covers every layer from the OS terminal up to the game loop,
-explains why each piece was chosen, and records what was validated through the POC.
+explains why each piece was chosen, and records what was validated through the POCs.
 
 ---
 
@@ -19,11 +19,12 @@ explains why each piece was chosen, and records what was validated through the P
 │                   Game Loop / ECS                        │
 │              Raw Rust  ·  manual fixed-dt                │
 ├──────────────────────────────────────────────────────────┤
-│                  Pixel Rendering                         │
-│          image 0.25  +  imageproc 0.25                   │
-├──────────────────────────────────────────────────────────┤
-│           Graphics Protocol (auto-detected)              │
-│         viuer 0.11  →  Kitty · Sixel · iTerm2            │
+│              Dual Renderer (mode-switched)               │
+│  ┌────────────────────────┬───────────────────────────┐  │
+│  │     Pixel Renderer     │      Text Renderer        │  │
+│  │  image 0.25 + viuer    │  ratatui 0.29 + Unicode   │  │
+│  │  Kitty / Sixel / iTerm │  Any ANSI terminal        │  │
+│  └────────────────────────┴───────────────────────────┘  │
 ├──────────────────────────────────────────────────────────┤
 │               Terminal I/O / Cross-platform              │
 │                    Crossterm 0.28                        │
@@ -35,25 +36,77 @@ explains why each piece was chosen, and records what was validated through the P
 
 ---
 
-## Why Pixel Rendering Over Unicode Characters
+## Dual Renderer — Core Requirement
 
-Two approaches were prototyped and compared side by side:
+The engine **must** support two completely separate rendering paths, selected at startup
+based on terminal capability (or overridden via CLI flag):
 
-| | Unicode / ratatui | Pixel / Sixel+Kitty |
+| | Pixel Renderer | Text Renderer |
 |---|---|---|
-| Rendering unit | Terminal cell (~8×16 px) | Individual pixel |
-| Ball | `●` character, snaps to cell grid | Anti-aliased sphere with specular highlight |
-| Trail | Stepped `·` characters | Smooth fading circles, colour-shifts per speed |
-| Flame | Flickering Unicode chars | Per-pixel procedural fire — red→orange→yellow→white |
-| Laser | `═─╌` char animation | Multi-pass glow: soft halo + bright core + energy pulses |
-| Glow / ambient | `░` block chars | True radial gradient, smooth falloff |
-| Sub-cell motion | No — position rounded to cell | Yes — smooth at any speed |
-| Colour depth | 256-colour or RGB per cell | Full 24-bit RGB per pixel |
-| Terminal requirement | Any ANSI terminal | Kitty / Sixel / iTerm2 (auto-detected, fallback exists) |
+| **When active** | Terminal supports Kitty, Sixel, or iTerm2 graphics | Any other terminal (ANSI-only) |
+| **Rendering unit** | Individual pixel (640×360 `RgbaImage`) | Terminal cell (~8×16 px) via ratatui |
+| **Ball** | Anti-aliased sphere with specular highlight, glow | `●` character, bold + colour |
+| **Trail** | Smooth fading circles, colour-shifts per speed | Stepped `·` / `∙` characters, fading colour |
+| **Flame** | Per-pixel procedural fire — red→orange→yellow→white | Flickering Unicode chars |
+| **Laser** | Multi-pass glow: soft halo + bright core + energy pulses | `═─╌` char animation |
+| **Glow / ambient** | True radial gradient, smooth falloff | `░` block chars around object |
+| **Sub-cell motion** | Yes — smooth at any speed | No — position rounded to cell |
+| **Colour depth** | Full 24-bit RGB per pixel | 256-colour or RGB per cell |
+| **Dependencies** | `image` + `imageproc` + `viuer` | `ratatui` |
+| **FPS target** | 60 fps | 60 fps |
 
-The pixel stack was chosen. TIM2's parts — curved ramps, spinning gears, bouncing balls, ropes —
-need sub-cell precision and smooth colour gradients to feel right. Unicode characters can
-approximate these shapes but not accurately represent them.
+### Why dual instead of fallback
+
+Three approaches were prototyped (`tiered-poc/`, `dual-poc/`, `hybrid-poc/`):
+
+| Approach | Verdict |
+|---|---|
+| **Tiered** (single viuer pipeline, adaptive quality) | Half-block fallback still looks mediocre even at reduced resolution. Limited control over text-mode appearance. |
+| **Hybrid** (ratatui layout + pixel overlay) | Complex coordination between ratatui and viuer. Potential flicker at overlay boundary. Over-engineered for what we need. |
+| **Dual** (two independent renderers) | Full control over both paths. Each renderer is purpose-built for its medium. Text mode looks good on its own terms rather than being a degraded pixel mode. **Chosen.** |
+
+### Mode detection
+
+At startup the engine detects graphics capability via environment variables:
+
+```rust
+fn detect_mode() -> RenderMode {
+    // CLI override: --pixel or --text
+    // Then auto-detect:
+    //   TERM=xterm-kitty || KITTY_WINDOW_ID    → Pixel
+    //   TERM_PROGRAM=WezTerm                    → Pixel
+    //   TERM_PROGRAM=ghostty                    → Pixel
+    //   TERM_PROGRAM=iTerm.app                  → Pixel
+    //   otherwise                               → Text
+}
+```
+
+CLI flags `--pixel` and `--text` override auto-detection for testing and user preference.
+
+### Renderer trait
+
+Both renderers implement a shared interface so the game loop doesn't branch on mode
+after initialization:
+
+```rust
+trait Renderer {
+    fn render_frame(&mut self, state: &GameState) -> Result<()>;
+    fn cleanup(&mut self) -> Result<()>;
+}
+
+struct PixelRenderer { /* viuer config, image buffer */ }
+struct TextRenderer  { /* ratatui terminal */ }
+```
+
+The game loop calls `renderer.render_frame(&state)` — the active renderer handles all
+drawing, HUD, and terminal output internally.
+
+### Shared physics, separate visuals
+
+Physics and game logic are **completely decoupled** from rendering. The game state uses
+normalized coordinates or canvas-pixel coordinates — each renderer maps these to its own
+output space. A game running in text mode must produce identical physics outcomes to the
+same game running in pixel mode.
 
 ---
 
@@ -80,18 +133,16 @@ execute!(stdout(), cursor::MoveTo(0, 0))?;
 
 ---
 
-### 2. Pixel Buffer — image 0.25 + imageproc 0.25
+### 2a. Pixel Renderer — image 0.25 + imageproc 0.25 + viuer 0.11
 
-**What they do:** `image` provides the `RgbaImage` pixel buffer (a flat `Vec<u8>` of RGBA values).
-`imageproc` provides drawing primitives on top of it.
+Active when the terminal supports Kitty, Sixel, or iTerm2 graphics.
 
-**Each frame we:**
-1. Allocate (or reuse) a fixed-size `RgbaImage` (e.g. 640×360)
-2. Clear it to the background colour
-3. Draw all game objects — physics parts, particles, UI — into the pixel buffer
-4. Hand it to `viuer` to encode and transmit
+**Each frame:**
+1. Clear a fixed-size `RgbaImage` (640×360) to the background colour
+2. Draw all game objects — physics parts, particles, UI — into the pixel buffer
+3. Hand it to `viuer` to encode and transmit via the detected graphics protocol
 
-**Key drawing operations (`gfx.rs` shared library):**
+**Key drawing operations (`gfx.rs`):**
 
 | Function | Purpose |
 |---|---|
@@ -102,49 +153,56 @@ execute!(stdout(), cursor::MoveTo(0, 0))?;
 | `fill_rect(img, x, y, w, h, col, alpha)` | Solid/transparent rectangles — walls, part bodies |
 | `blend / over` | Additive and alpha-composite pixel blending |
 
-**Canvas size:** 640×360 pixels. `viuer` scales this to fit the terminal automatically.
-The physics simulation runs in canvas-pixel coordinates (no unit conversion needed).
+**Canvas size:** 640×360 pixels. `viuer` scales to fit the terminal automatically.
 
----
-
-### 3. Graphics Protocol — viuer 0.11
-
-**What it does:** Auto-detects the best pixel graphics protocol supported by the running terminal
-and encodes + transmits the pixel buffer each frame.
-
-**Protocol priority (automatic):**
+**Graphics protocol priority (auto-detected by viuer):**
 
 | Protocol | Terminals | Notes |
 |---|---|---|
 | **Kitty Graphics Protocol** | kitty, WezTerm, Ghostty | Fastest; delta updates possible |
 | **Sixel** | xterm, mlterm, foot, many others | Widely supported; full-frame encode |
 | **iTerm2 inline images** | iTerm2, Warp | macOS-oriented |
-| **Unicode half-block fallback** | Any ANSI terminal | Lower fidelity; always works |
-
-`viuer` handles the detection and fallback transparently — no code changes needed to support a
-new terminal.
-
-**Render call per frame:**
-```rust
-execute!(stdout(), cursor::MoveTo(0, 0))?;
-viuer::print(&img, &Config {
-    x: 0, y: 0,
-    width:  Some(term_w as u32),
-    height: Some((term_h - 2) as u32),  // leave rows for text HUD
-    ..Default::default()
-})?;
-```
 
 **Why not notcurses:** `libnotcurses` (C library) in the system package manager is v3.0.6,
-but the Rust crate requires ≥ 3.0.11. Building from source adds a non-trivial CI/distribution
+but the Rust crate requires >= 3.0.11. Building from source adds a non-trivial CI/distribution
 burden. `viuer` is pure Rust, zero C dependencies, and produces the same Sixel/Kitty output.
 
 ---
 
-### 4. Game Loop — Raw Rust
+### 2b. Text Renderer — ratatui 0.29
 
-**No Bevy.** The pixel rendering stack does not need an ECS for the POC. Bevy was evaluated
-(see `cannon-poc/`) but removed for the following reasons:
+Active when the terminal does not support pixel graphics (or when `--text` is passed).
+
+**Each frame:**
+1. Use ratatui's `Terminal::draw()` to get a `Frame`
+2. Layout the screen with `Layout` constraints (game area + HUD)
+3. Render the game area as a ratatui `Widget` using Unicode drawing characters
+4. Render the HUD as styled `Paragraph` widgets
+
+**Character vocabulary:**
+
+| Game element | Characters | Styling |
+|---|---|---|
+| Ball | `●` | Bold, coloured |
+| Trail | `·` `∙` | Fading indexed colours |
+| Glow | `░` | Dim colour around objects |
+| Cannon body | `█` | RGB colour |
+| Cannon barrel | `═` | RGB colour |
+| Ramp / platform | `▬` | Green / blue |
+| Direction arrow | `→ ↗ ↑ ↖ ← ↙ ↓ ↘` | Orange |
+| Preview arc | `·` | Dim grey |
+| Walls / border | ratatui `Block` with `Borders::ALL` | DarkGray |
+
+**Why ratatui instead of raw crossterm:** ratatui provides double-buffered diffing (only
+updates cells that changed), layout management, and styled text composition. These are
+exactly the things that make text-mode rendering not feel janky.
+
+---
+
+### 3. Game Loop — Raw Rust
+
+**No Bevy.** Neither renderer needs an ECS. Bevy was evaluated (see `cannon-poc/`) but
+removed for the following reasons:
 
 | Reason | Detail |
 |---|---|
@@ -155,14 +213,19 @@ burden. `viuer` is pure Rust, zero C dependencies, and produces the same Sixel/K
 
 **Game loop structure:**
 ```rust
+let mode = detect_mode();
+let mut renderer: Box<dyn Renderer> = match mode {
+    RenderMode::Pixel => Box::new(PixelRenderer::new()?),
+    RenderMode::Text  => Box::new(TextRenderer::new()?),
+};
+
 let frame_dur = Duration::from_secs_f64(1.0 / 60.0);
 loop {
     let frame_start = Instant::now();
 
     handle_input(&mut state)?;       // non-blocking crossterm poll
     update_physics(&mut state, dt);  // fixed-dt Euler integration
-    let img = render(&state);        // draw to pixel buffer
-    display(img, &cfg)?;             // viuer encode + transmit
+    renderer.render_frame(&state)?;  // pixel or text — polymorphic
 
     let elapsed = frame_start.elapsed();
     if elapsed < frame_dur { std::thread::sleep(frame_dur - elapsed); }
@@ -175,7 +238,7 @@ lightweight archetypal ECS) is the preferred addition, not Bevy.
 
 ---
 
-### 5. Physics
+### 4. Physics
 
 **Current (POC):** Manual Euler integration.
 ```
@@ -201,33 +264,67 @@ know where to draw each part. This gives us:
 - Convex + compound colliders (ramps, gears, baskets)
 - Joints (ropes as articulated chains, pulleys as constraints)
 - Continuous collision detection (fast-moving balls)
-- Deterministic simulation (same seed → same solution every time, required for puzzle replay)
+- Deterministic simulation (same seed -> same solution every time, required for puzzle replay)
 
 ---
 
 ## POC Projects
 
-### `cannon-poc/` — ratatui stack (reference / comparison)
+### `cannon-poc/` — Bevy + ratatui (reference / comparison)
 
-Unicode character rendering at 60fps. Used to establish the baseline and validate the
-Bevy + bevy_ratatui integration before deciding to move to the pixel stack.
+Unicode character rendering at 60fps using Bevy ECS + ratatui. Used to establish the
+baseline and validate the Bevy + bevy_ratatui integration before deciding to remove Bevy.
 
 ```bash
-cd cannon-poc
+cd pocs/cannon-poc
 cargo run --bin cannon --release   # physics demo
 cargo run --bin demos  --release   # laser / pot / candle
 ```
 
-### `sixel-poc/` — pixel stack (chosen)
+### `sixel-poc/` — pixel stack (original)
 
-Pixel rendering via viuer (Kitty/Sixel auto-detected). This is the stack that becomes
-the production game.
+Pixel rendering via viuer (Kitty/Sixel auto-detected). Validated the pixel rendering
+pipeline before the dual renderer decision.
 
 ```bash
-cd sixel-poc
+cd pocs/sixel-poc
 cargo run --bin cannon --release   # smooth sphere, glow trail, physics
 cargo run --bin demos  --release   # laser / boiling pot / candle
 # [1] Laser  [2] Pot  [3] Candle  [Tab] Next  [Q] Quit
+```
+
+### `dual-poc/` — dual renderer (chosen approach)
+
+Two independent renderers: pixel (viuer) and text (ratatui). Auto-detects terminal
+capability, or override with `--pixel` / `--text`. This is the approach that becomes
+the production engine.
+
+```bash
+cd pocs/dual-poc
+cargo run --release                # auto-detect mode
+cargo run --release -- --pixel     # force pixel mode
+cargo run --release -- --text      # force text mode
+```
+
+### `tiered-poc/` — adaptive viuer quality (evaluated, not chosen)
+
+Single viuer pipeline with adaptive canvas size and effect complexity. Rejected because
+the half-block fallback still looked mediocre.
+
+```bash
+cd pocs/tiered-poc
+cargo run --release
+```
+
+### `hybrid-poc/` — ratatui layout + pixel overlay (evaluated, not chosen)
+
+Ratatui for layout/HUD everywhere, pixel overlay for game area. Rejected due to
+integration complexity and flicker at the overlay boundary.
+
+```bash
+cd pocs/hybrid-poc
+cargo run --release
+cargo run --release -- --text
 ```
 
 ---
@@ -236,10 +333,16 @@ cargo run --bin demos  --release   # laser / boiling pot / candle
 
 ```toml
 [dependencies]
+# Shared
+crossterm  = "0.28"
+
+# Pixel renderer
 image      = "0.25"
 imageproc  = "0.25"
 viuer      = "0.11"
-crossterm  = "0.28"
+
+# Text renderer
+ratatui    = "0.29"
 
 # Physics (to be added for production):
 rapier2d   = "0.22"
@@ -249,18 +352,21 @@ rapier2d   = "0.22"
 
 ## Terminal Compatibility
 
-| Terminal | Protocol | Fidelity |
+| Terminal | Renderer | Fidelity |
 |---|---|---|
-| kitty | Kitty Graphics Protocol | Full pixel, fastest |
-| WezTerm | Kitty Graphics Protocol | Full pixel |
-| Ghostty | Kitty Graphics Protocol | Full pixel |
-| xterm (256color) | Sixel | Full pixel |
-| foot | Sixel | Full pixel |
-| iTerm2 | iTerm2 inline | Full pixel |
-| tmux (passthrough) | Sixel (with passthrough config) | Full pixel |
-| Any ANSI terminal | Unicode half-block fallback | Lower fidelity |
+| kitty | Pixel (Kitty Graphics Protocol) | Full pixel, fastest |
+| WezTerm | Pixel (Kitty Graphics Protocol) | Full pixel |
+| Ghostty | Pixel (Kitty Graphics Protocol) | Full pixel |
+| xterm (256color) | Pixel (Sixel) | Full pixel |
+| foot | Pixel (Sixel) | Full pixel |
+| iTerm2 | Pixel (iTerm2 inline) | Full pixel |
+| tmux (passthrough) | Pixel (Sixel, with passthrough config) | Full pixel |
+| Any ANSI terminal | Text (ratatui) | Cell-based, purpose-built |
+| SSH / headless | Text (ratatui) | Cell-based, works everywhere |
 
 SSH-safe: no GPU, no display server, no window manager required. Runs anywhere Rust runs.
+The text renderer ensures full playability on any terminal — it is not a degraded fallback
+but a purpose-built rendering path.
 
 ---
 
@@ -268,9 +374,9 @@ SSH-safe: no GPU, no display server, no window manager required. Runs anywhere R
 
 | Thing | Why excluded |
 |---|---|
-| Bevy | Version coupling, rendering model mismatch, overhead — see §4 |
-| Ratatui | Character-cell resolution insufficient; kept in `cannon-poc` as reference only |
+| Bevy | Version coupling, rendering model mismatch, overhead — see §3 |
 | Notcurses | C library version mismatch with system packages; `viuer` is a pure-Rust equivalent |
 | GPU renderer | Terminal is the display — no GPU pipeline needed |
 | Asset pipeline | Parts are drawn procedurally in code; no sprite files to load |
-| bevy_ratatui_camera | Bridges GPU→terminal; unnecessary in our pixel-buffer approach |
+| bevy_ratatui_camera | Bridges GPU->terminal; unnecessary in our approach |
+| viuer half-block fallback | Replaced by the purpose-built text renderer using ratatui |
