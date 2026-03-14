@@ -1,17 +1,23 @@
 [package]
-name = "tim2-terminal"
+name = "tim2"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "tim2"
-path = "src/main.rs"
+path = "src/bin/tim2.rs"
+
+[[bin]]
+name = "part-explorer"
+path = "src/bin/part_explorer.rs"
 
 [dependencies]
+crossterm = "0.28"
 image = "0.25"
 imageproc = "0.25"
 viuer = "0.11"
-crossterm = "0.28"
-
-[profile.release]
-opt-level = 2
+ratatui = "0.29"
+anyhow = "1"

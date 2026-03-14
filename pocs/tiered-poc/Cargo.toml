@@ -1,0 +1,17 @@
+[package]
+name = "tiered-poc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tiered"
+path = "src/main.rs"
+
+[dependencies]
+image     = "0.25"
+imageproc = "0.25"
+viuer     = "0.11"
+crossterm = "0.28"
+
+[profile.release]
+opt-level = 3
