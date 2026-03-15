@@ -8,7 +8,7 @@ use crossterm::{
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use image::RgbaImage;
+use image::{imageops, RgbaImage};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -424,7 +424,12 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
             .title(format!(" {} ", game.puzzle.title));
         let pf_inner = pf_block.inner(playfield_area);
         f.render_widget(pf_block, playfield_area);
-        braille::render_braille(&img, f.buffer_mut(), pf_inner);
+
+        // Downscale 640x360 canvas to fit the terminal braille area
+        let target_w = (pf_inner.width as u32 * 2).max(1);
+        let target_h = (pf_inner.height as u32 * 4).max(1);
+        let scaled = imageops::resize(&img, target_w, target_h, imageops::FilterType::Nearest);
+        braille::render_braille(&scaled, f.buffer_mut(), pf_inner);
 
         // ── Parts Bin ──
         let mut bin_lines: Vec<Line> = Vec::new();
