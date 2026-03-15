@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
+    event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -21,8 +21,8 @@ use tim2::parts::*;
 use tim2::physics;
 use tim2::puzzle::*;
 use tim2::render::braille;
+use tim2::render::pixel_gfx;
 use tim2::world::*;
-use tim2::world::InstanceSnapshot;
 
 // ── Game State ──────────────────────────────────────────────────
 
@@ -33,26 +33,44 @@ enum Mode {
     Won,
 }
 
+/// What the player is doing in Build mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildFocus {
+    /// Arrow keys move the cursor. Enter places from bin.
+    Cursor,
+    /// A player part is selected. Arrow keys move it. Enter/Esc deselects.
+    MovingPart(InstanceId),
+}
+
 struct Game {
     world: World,
     puzzle: Puzzle,
     mode: Mode,
     frame: u64,
 
+    // Build mode state
+    focus: BuildFocus,
+    cursor_x: f32,
+    cursor_y: f32,
+
     // Parts bin
     bin: Vec<BinEntry>,
     selected_bin: usize,
 
-    // Dragging
-    dragging: Option<DragState>,
-
-    // Player-placed instance IDs (for removal on reset)
+    // Player-placed instance IDs
     player_instances: Vec<InstanceId>,
 
-    // Snapshot for sim reset (taken when sim starts)
+    // Snapshot for sim reset
     snapshot: Vec<InstanceSnapshot>,
 
-    // Playfield area in terminal coords (set during render)
+    // Initial world state for full reset
+    initial_snapshot: Vec<InstanceSnapshot>,
+
+    // Status message (fades after a few frames)
+    status_msg: String,
+    status_frames: u64,
+
+    // Playfield rect (set during render)
     playfield_rect: Rect,
 }
 
@@ -69,14 +87,6 @@ impl BinEntry {
     }
 }
 
-#[derive(Debug, Clone)]
-struct DragState {
-    instance_id: InstanceId,
-    /// Offset from part origin to grab point.
-    offset_x: f32,
-    offset_y: f32,
-}
-
 impl Game {
     fn new(world: World, puzzle: Puzzle) -> Self {
         let bin: Vec<BinEntry> = puzzle
@@ -88,33 +98,45 @@ impl Game {
                 placed: 0,
             })
             .collect();
+        let initial_snapshot = world.snapshot();
         Self {
             world,
             puzzle,
             mode: Mode::Build,
             frame: 0,
+            focus: BuildFocus::Cursor,
+            cursor_x: CANVAS_W as f32 / 2.0,
+            cursor_y: CANVAS_H as f32 / 2.0,
             bin,
             selected_bin: 0,
-            dragging: None,
             player_instances: Vec::new(),
             snapshot: Vec::new(),
+            initial_snapshot,
+            status_msg: String::new(),
+            status_frames: 0,
             playfield_rect: Rect::default(),
         }
     }
 
+    fn set_status(&mut self, msg: &str) {
+        self.status_msg = msg.to_string();
+        self.status_frames = 90; // ~3 seconds at 30fps
+    }
+
     fn start_sim(&mut self) {
         if self.mode == Mode::Build {
-            // Take snapshot of all positions before running
+            self.focus = BuildFocus::Cursor;
             self.snapshot = self.world.snapshot();
             self.mode = Mode::Running;
+            self.set_status("Simulation running...");
         }
     }
 
     fn stop_sim(&mut self) {
         if self.mode == Mode::Running {
-            // Restore everything to pre-sim positions
             self.world.restore(&self.snapshot);
             self.mode = Mode::Build;
+            self.set_status("Simulation stopped. Parts restored.");
         }
     }
 
@@ -123,93 +145,100 @@ impl Game {
         for id in self.player_instances.drain(..) {
             self.world.remove(id);
         }
-        // Reset bin counts
         for entry in &mut self.bin {
             entry.placed = 0;
         }
+        // Restore fixed parts to initial positions
+        self.world.restore(&self.initial_snapshot);
         self.mode = Mode::Build;
-        // Reset all parts to initial state
-        for inst in &mut self.world.instances {
-            inst.vx = 0.0;
-            inst.vy = 0.0;
-            inst.props.current_state = 0;
-        }
+        self.focus = BuildFocus::Cursor;
+        self.set_status("Puzzle reset.");
     }
 
     fn tick(&mut self) {
         if self.mode != Mode::Running {
             return;
         }
-        let dt = 1.0 / 60.0;
-        physics::tick(&mut self.world, dt);
+        physics::tick(&mut self.world, 1.0 / 60.0);
 
-        // Check win conditions
         let status = evaluate(&self.world, &self.puzzle.win_conditions);
         if status == PuzzleStatus::Won {
             self.mode = Mode::Won;
+            self.set_status("");
         }
     }
 
-    /// Convert terminal cell coords to world/canvas coords.
-    fn screen_to_world(&self, sx: u16, sy: u16) -> (f32, f32) {
-        let pf = self.playfield_rect;
-        if pf.width == 0 || pf.height == 0 {
-            return (0.0, 0.0);
-        }
-        // Each terminal cell maps to some canvas pixels
-        // braille: 2px wide, 4px tall per cell
-        let scale_x = CANVAS_W as f32 / (pf.width as f32 * 2.0);
-        let scale_y = CANVAS_H as f32 / (pf.height as f32 * 4.0);
-        let lx = (sx.saturating_sub(pf.x)) as f32 * 2.0 * scale_x;
-        let ly = (sy.saturating_sub(pf.y)) as f32 * 4.0 * scale_y;
-        (lx, ly)
-    }
+    /// Check if placing a part at (x,y) would overlap any existing part.
+    fn would_overlap(&self, part_id: PartId, x: f32, y: f32, exclude: Option<InstanceId>) -> bool {
+        let def = part_id.part_def();
+        let (w, h) = def.default_size();
+        let (ax1, ay1, ax2, ay2) = (x, y, x + w, y + h);
 
-    /// Find instance at world coords.
-    fn instance_at(&self, wx: f32, wy: f32) -> Option<InstanceId> {
-        // Search in reverse (top-drawn last = on top)
-        for inst in self.world.instances.iter().rev() {
-            let (x1, y1, x2, y2) = inst.bounds();
-            if wx >= x1 && wx <= x2 && wy >= y1 && wy <= y2 {
-                return Some(inst.id);
+        for inst in &self.world.instances {
+            if Some(inst.id) == exclude {
+                continue;
+            }
+            let (bx1, by1, bx2, by2) = inst.bounds();
+            if ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1 {
+                return true;
             }
         }
-        None
+        false
     }
 
-    fn place_from_bin(&mut self, wx: f32, wy: f32) -> Option<InstanceId> {
+    fn place_from_bin(&mut self) {
+        if self.mode != Mode::Build {
+            return;
+        }
         if self.selected_bin >= self.bin.len() {
-            return None;
+            return;
         }
         let entry = &self.bin[self.selected_bin];
         if entry.available() == 0 {
-            return None;
+            self.set_status("No more of that part available!");
+            return;
         }
         let part_id = entry.part_id;
         let def = part_id.part_def();
         let (pw, ph) = def.default_size();
-        let id = self.world.spawn(part_id, wx - pw / 2.0, wy - ph / 2.0);
+        let px = self.cursor_x - pw / 2.0;
+        let py = self.cursor_y - ph / 2.0;
+
+        if self.would_overlap(part_id, px, py, None) {
+            self.set_status("Can't place here — overlapping another part!");
+            return;
+        }
+
+        let id = self.world.spawn(part_id, px, py);
         self.player_instances.push(id);
         self.bin[self.selected_bin].placed += 1;
-        Some(id)
+        self.focus = BuildFocus::MovingPart(id);
+        self.set_status(&format!("Placed {}. Arrows to move, Esc to deselect.", def.name()));
     }
 
-    fn return_to_bin(&mut self, id: InstanceId) {
-        // Find which bin entry this belongs to
-        if let Some(inst) = self.world.get(id) {
-            let part_id = inst.part_id;
-            if let Some(entry) = self.bin.iter_mut().find(|e| e.part_id == part_id) {
-                entry.placed = entry.placed.saturating_sub(1);
+    fn delete_selected(&mut self) {
+        if let BuildFocus::MovingPart(id) = self.focus {
+            if self.player_instances.contains(&id) {
+                if let Some(inst) = self.world.get(id) {
+                    let part_id = inst.part_id;
+                    if let Some(entry) = self.bin.iter_mut().find(|e| e.part_id == part_id) {
+                        entry.placed = entry.placed.saturating_sub(1);
+                    }
+                }
+                self.world.remove(id);
+                self.player_instances.retain(|i| *i != id);
+                self.focus = BuildFocus::Cursor;
+                self.set_status("Part returned to bin.");
             }
         }
-        self.world.remove(id);
-        self.player_instances.retain(|i| *i != id);
+    }
+
+    fn move_step(&self) -> f32 {
+        4.0 // pixels per arrow press
     }
 }
 
-// ── Puzzle #1: Knock the eight ball off the screen ───────────────
-// From the original TIM2 manual (page 9):
-// "All you have to do is put the superball under the eight ball."
+// ── Puzzle #1 ────────────────────────────────────────────────────
 
 fn build_puzzle_1() -> (World, Puzzle) {
     use tim2::parts::balls::BallType;
@@ -217,7 +246,6 @@ fn build_puzzle_1() -> (World, Puzzle) {
 
     let mut world = World::new();
 
-    // Helper to set wall dimensions
     let set_size = |w: &mut World, width: f32, height: f32| {
         if let Some(inst) = w.instances.last_mut() {
             inst.props.width = width;
@@ -225,17 +253,17 @@ fn build_puzzle_1() -> (World, Puzzle) {
         }
     };
 
-    // ── Floor ──
+    // Floor
     world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 340.0);
     set_size(&mut world, 640.0, 20.0);
 
-    // ── Brick columns flanking the 8-ball (decorative, frame the play area) ──
+    // Brick columns flanking the 8-ball
     world.spawn_locked(PartId::Wall(WallType::BrickWall), 430.0, 100.0);
     set_size(&mut world, 16.0, 240.0);
     world.spawn_locked(PartId::Wall(WallType::BrickWall), 520.0, 100.0);
     set_size(&mut world, 16.0, 240.0);
 
-    // ── Scattered fixed balls (decoration, like original layout) ──
+    // Decorative balls
     world.spawn_locked(PartId::Ball(BallType::BowlingBall), 50.0, 180.0);
     world.spawn_locked(PartId::Ball(BallType::Basketball), 100.0, 180.0);
     world.spawn_locked(PartId::Ball(BallType::SoccerBall), 145.0, 180.0);
@@ -245,45 +273,26 @@ fn build_puzzle_1() -> (World, Puzzle) {
     world.spawn_locked(PartId::Ball(BallType::Basketball), 285.0, 180.0);
     world.spawn_locked(PartId::Ball(BallType::SoccerBall), 330.0, 180.0);
 
-    // ── The 8-ball (pool ball) floating between the columns ──
-    // Pool ball has ZeroGravity — it hangs in the air until struck
+    // 8-ball floating between columns (ZeroGravity)
     let eightball_id = world.spawn_locked(PartId::Ball(BallType::PoolBall), 470.0, 140.0);
     if let Some(inst) = world.get_mut(eightball_id) {
         inst.props.values.insert("surface_number".to_string(), 8.0);
     }
 
-    // ── Puzzle definition ──
     let mut puzzle = Puzzle::new(
         "Puzzle #1",
         "Knock the eight ball off the screen.",
     );
 
-    // Win: the 8-ball exits the screen (any edge)
     puzzle.win_conditions.push(WinCondition::ObjectExitedWorld {
         instance_id: eightball_id,
         edge: WorldEdge::Any,
     });
 
-    // Player's parts bin
-    // Solution: place super ball (elasticity 1.1) under the 8-ball.
-    // It bounces on the floor gaining height until it hits the 8-ball.
-    // Extra balls are decoys (like the original).
-    puzzle.bin_parts.push(BinPart {
-        part_id: PartId::Ball(BallType::SuperBall),
-        quantity: 1,
-    });
-    puzzle.bin_parts.push(BinPart {
-        part_id: PartId::Ball(BallType::Basketball),
-        quantity: 1,
-    });
-    puzzle.bin_parts.push(BinPart {
-        part_id: PartId::Ball(BallType::SoccerBall),
-        quantity: 1,
-    });
-    puzzle.bin_parts.push(BinPart {
-        part_id: PartId::Ball(BallType::TennisBall),
-        quantity: 1,
-    });
+    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::SuperBall), quantity: 1 });
+    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::Basketball), quantity: 1 });
+    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::SoccerBall), quantity: 1 });
+    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::TennisBall), quantity: 1 });
 
     (world, puzzle)
 }
@@ -294,19 +303,19 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
     terminal.draw(|f| {
         let size = f.area();
 
-        // Layout: [control_col | playfield | parts_bin]
-        let main_layout = Layout::default()
+        // Layout: [goal | playfield+bin | help]
+        let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(3)])
             .split(size);
 
-        let goal_area = main_layout[0];
-        let middle = main_layout[1];
-        let help_area = main_layout[2];
+        let goal_area = rows[0];
+        let middle = rows[1];
+        let help_area = rows[2];
 
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(20), Constraint::Length(22)])
+            .constraints([Constraint::Min(20), Constraint::Length(24)])
             .split(middle);
 
         let playfield_area = cols[0];
@@ -315,86 +324,106 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
         game.playfield_rect = playfield_area;
 
         // ── Goal bar ──
-        let status_text = match game.mode {
-            Mode::Build => " [BUILD] ",
-            Mode::Running => " [RUNNING] ",
-            Mode::Won => " *** YOU WIN! *** ",
+        let (status_text, goal_color) = match game.mode {
+            Mode::Build => (" BUILD ", Color::Cyan),
+            Mode::Running => (" RUNNING ", Color::Yellow),
+            Mode::Won => (" PUZZLE COMPLETE! ", Color::Green),
         };
-        let goal_color = match game.mode {
-            Mode::Build => Color::White,
-            Mode::Running => Color::Yellow,
-            Mode::Won => Color::Green,
-        };
-        let goal = Paragraph::new(Line::from(vec![
-            Span::styled(status_text, Style::default().fg(Color::Black).bg(goal_color)),
-            Span::raw(" "),
-            Span::raw(&game.puzzle.goal_text),
-        ]))
-        .block(Block::default().borders(Borders::BOTTOM));
+        let mut goal_spans = vec![
+            Span::styled(
+                format!(" {} ", status_text),
+                Style::default().fg(Color::Black).bg(goal_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(&game.puzzle.goal_text, Style::default().fg(Color::White)),
+        ];
+        // Show cursor position in build mode
+        if game.mode == Mode::Build {
+            goal_spans.push(Span::styled(
+                format!("  [{:.0},{:.0}]", game.cursor_x, game.cursor_y),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        let goal = Paragraph::new(Line::from(goal_spans))
+            .block(Block::default().borders(Borders::BOTTOM));
         f.render_widget(goal, goal_area);
 
-        // ── Playfield (braille) ──
-        let pf_inner = Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {} ", game.puzzle.title))
-            .inner(playfield_area);
+        // ── Playfield ──
+        // Render at full canvas resolution, let braille downscale
+        let mut img = RgbaImage::from_pixel(CANVAS_W, CANVAS_H, image::Rgba(BG_COLOR));
 
-        // Render world to pixel buffer then convert to braille
-        let pw = (pf_inner.width as u32 * 2).max(1);
-        let ph = (pf_inner.height as u32 * 4).max(1);
-        let mut img = RgbaImage::from_pixel(pw, ph, image::Rgba(BG_COLOR));
-
-        // Scale: map canvas coords to pixel buffer
-        let sx = pw as f32 / CANVAS_W as f32;
-        let sy = ph as f32 / CANVAS_H as f32;
-
-        // Draw grid
+        // Grid
         for gx in (0..CANVAS_W).step_by(GRID_SIZE as usize) {
-            let px = (gx as f32 * sx) as i32;
-            for py in 0..ph as i32 {
-                tim2::render::pixel_gfx::blend_pixel(&mut img, px, py, GRID_COLOR);
+            for py in 0..CANVAS_H as i32 {
+                pixel_gfx::blend_pixel(&mut img, gx as i32, py, GRID_COLOR);
             }
         }
         for gy in (0..CANVAS_H).step_by(GRID_SIZE as usize) {
-            let py = (gy as f32 * sy) as i32;
-            for px in 0..pw as i32 {
-                tim2::render::pixel_gfx::blend_pixel(&mut img, px, py, GRID_COLOR);
-            }
-        }
-
-        // Draw target zone highlight
-        for cond in &game.puzzle.win_conditions {
-            if let WinCondition::ObjectAtPosition { region, .. } = cond {
-                let rx1 = (region.0 * sx) as i32;
-                let ry1 = (region.1 * sy) as i32;
-                let rx2 = (region.2 * sx) as i32;
-                let ry2 = (region.3 * sy) as i32;
-                for y in ry1..ry2 {
-                    for x in rx1..rx2 {
-                        tim2::render::pixel_gfx::blend_pixel(&mut img, x, y, [50, 255, 50, 30]);
-                    }
-                }
+            for px in 0..CANVAS_W as i32 {
+                pixel_gfx::blend_pixel(&mut img, px, gy as i32, GRID_COLOR);
             }
         }
 
         // Draw all parts
         for inst in &game.world.instances {
-            let px = inst.x * sx;
-            let py = inst.y * sy;
             let def = inst.def();
-            // Scale props for rendering
-            let mut rprops = inst.props.clone();
-            rprops.width *= sx;
-            rprops.height *= sy;
-            def.draw_pixel(&mut img, px, py, &rprops, game.frame);
+            def.draw_pixel(&mut img, inst.x, inst.y, &inst.props, game.frame);
+
+            // Highlight selected part with border
+            if let BuildFocus::MovingPart(sel_id) = game.focus {
+                if inst.id == sel_id {
+                    let (x1, y1, x2, y2) = inst.bounds();
+                    let highlight = [0, 255, 255, 180];
+                    for x in (x1 as i32)..(x2 as i32) {
+                        pixel_gfx::blend_pixel(&mut img, x, y1 as i32 - 1, highlight);
+                        pixel_gfx::blend_pixel(&mut img, x, y2 as i32, highlight);
+                    }
+                    for y in (y1 as i32)..(y2 as i32) {
+                        pixel_gfx::blend_pixel(&mut img, x1 as i32 - 1, y, highlight);
+                        pixel_gfx::blend_pixel(&mut img, x2 as i32, y, highlight);
+                    }
+                }
+            }
         }
 
-        // Render border first
-        let pf_block = Block::default().borders(Borders::ALL).title(format!(" {} ", game.puzzle.title));
+        // Draw cursor crosshair in build mode
+        if game.mode == Mode::Build {
+            let cx = game.cursor_x as i32;
+            let cy = game.cursor_y as i32;
+            let cross_color = if matches!(game.focus, BuildFocus::Cursor) {
+                [255, 255, 0, 200]
+            } else {
+                [100, 100, 100, 120]
+            };
+            for d in 3..12 {
+                pixel_gfx::blend_pixel(&mut img, cx - d, cy, cross_color);
+                pixel_gfx::blend_pixel(&mut img, cx + d, cy, cross_color);
+                pixel_gfx::blend_pixel(&mut img, cx, cy - d, cross_color);
+                pixel_gfx::blend_pixel(&mut img, cx, cy + d, cross_color);
+            }
+        }
+
+        // Win overlay
+        if game.mode == Mode::Won {
+            // Semi-transparent green overlay
+            for y in 0..CANVAS_H as i32 {
+                for x in 0..CANVAS_W as i32 {
+                    pixel_gfx::blend_pixel(&mut img, x, y, [0, 60, 0, 100]);
+                }
+            }
+            // "PUZZLE COMPLETE!" text in center
+            let text = "PUZZLE COMPLETE!";
+            let tx = (CANVAS_W as i32 / 2) - (text.len() as i32 * 6 / 2);
+            let ty = CANVAS_H as i32 / 2 - 4;
+            pixel_gfx::draw_text(&mut img, tx, ty, text, [50, 255, 50, 255], 2);
+        }
+
+        // Render border + braille
+        let pf_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", game.puzzle.title));
         let pf_inner = pf_block.inner(playfield_area);
         f.render_widget(pf_block, playfield_area);
-
-        // Render braille directly into the buffer
         braille::render_braille(&img, f.buffer_mut(), pf_inner);
 
         // ── Parts Bin ──
@@ -403,30 +432,45 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
             let def = entry.part_id.part_def();
             let avail = entry.available();
             let ic = def.icon_color();
+            let marker = if i == game.selected_bin { ">" } else { " " };
             let style = if i == game.selected_bin {
                 Style::default()
                     .fg(Color::Rgb(ic[0], ic[1], ic[2]))
-                    .add_modifier(Modifier::REVERSED)
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else if avail == 0 {
                 Style::default().fg(Color::DarkGray)
             } else {
                 Style::default().fg(Color::Rgb(ic[0], ic[1], ic[2]))
             };
-            let icon = def.icon_char();
             bin_lines.push(Line::from(Span::styled(
-                format!(" {} {} ×{}", icon, def.name(), avail),
+                format!("{}{} {} x{}", marker, def.icon_char(), def.name(), avail),
                 style,
             )));
         }
+
+        // Status message
+        if game.status_frames > 0 {
+            bin_lines.push(Line::from(""));
+            let alpha = if game.status_frames > 30 { Color::Yellow } else { Color::DarkGray };
+            bin_lines.push(Line::from(Span::styled(&game.status_msg, Style::default().fg(alpha))));
+        }
+
         let bin_widget = Paragraph::new(bin_lines)
             .block(Block::default().borders(Borders::ALL).title(" Parts Bin "));
         f.render_widget(bin_widget, bin_area);
 
         // ── Help bar ──
         let help_text = match game.mode {
-            Mode::Build => "Space:Run | j/k:Select part | Enter:Place at center | d:Delete | r:Reset | f:Flip | q:Quit",
-            Mode::Running => "Space:Stop | r:Reset | q:Quit",
-            Mode::Won => "Space:Reset | n:Next puzzle | q:Quit",
+            Mode::Build => match game.focus {
+                BuildFocus::Cursor =>
+                    "Arrows:Move cursor | j/k:Select part | Enter:Place | Tab:Select placed | Space:Run | q:Quit",
+                BuildFocus::MovingPart(_) =>
+                    "Arrows:Move part | f:Flip | d:Delete | Esc:Deselect | Tab:Next part | Space:Run",
+            },
+            Mode::Running =>
+                "Space:Stop | q:Quit",
+            Mode::Won =>
+                "r:Reset puzzle | q:Quit",
         };
         let help = Paragraph::new(Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray))))
             .block(Block::default().borders(Borders::TOP));
@@ -438,15 +482,12 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
 // ── Main Loop ───────────────────────────────────────────────────
 
 fn main() -> Result<()> {
-    // Setup terminal
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
-    crossterm::execute!(stdout, crossterm::event::EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Build puzzle
     let (world, puzzle) = build_puzzle_1();
     let mut game = Game::new(world, puzzle);
 
@@ -455,161 +496,153 @@ fn main() -> Result<()> {
     loop {
         let frame_start = Instant::now();
 
-        // Physics ticks (2 per render frame for 60Hz physics at 30fps render)
+        // Physics ticks (2 per render frame for 60Hz at 30fps)
         if game.mode == Mode::Running {
             game.tick();
             game.tick();
         }
         game.frame += 1;
+        if game.status_frames > 0 {
+            game.status_frames -= 1;
+        }
 
-        // Render
         render_frame(&mut terminal, &mut game)?;
 
-        // Handle input (non-blocking)
+        // Input
         let elapsed = frame_start.elapsed();
         let timeout = tick_duration.saturating_sub(elapsed);
         if event::poll(timeout)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    match key.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                        KeyCode::Char(' ') => {
-                            match game.mode {
-                                Mode::Build => game.start_sim(),
-                                Mode::Running => game.stop_sim(),
-                                Mode::Won => game.reset_puzzle(),
-                            }
-                        }
-                        KeyCode::Char('r') => game.reset_puzzle(),
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Char('c') if key.code == KeyCode::Char('q') || key.modifiers.contains(KeyModifiers::CONTROL) => break,
 
-                        // Parts bin navigation
-                        KeyCode::Char('j') | KeyCode::Down if game.mode == Mode::Build => {
-                            if !game.bin.is_empty() {
-                                game.selected_bin = (game.selected_bin + 1) % game.bin.len();
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up if game.mode == Mode::Build => {
-                            if !game.bin.is_empty() {
-                                game.selected_bin = (game.selected_bin + game.bin.len() - 1) % game.bin.len();
-                            }
-                        }
+                    // ── Run / Stop ──
+                    KeyCode::Char(' ') => match game.mode {
+                        Mode::Build => game.start_sim(),
+                        Mode::Running => game.stop_sim(),
+                        Mode::Won => {}
+                    },
 
-                        // Place part at center of playfield
-                        KeyCode::Enter if game.mode == Mode::Build => {
-                            game.place_from_bin(CANVAS_W as f32 / 2.0, CANVAS_H as f32 / 2.0);
-                        }
+                    // ── Reset ──
+                    KeyCode::Char('r') => game.reset_puzzle(),
 
-                        // Flip last placed part
-                        KeyCode::Char('f') if game.mode == Mode::Build => {
-                            if let Some(&id) = game.player_instances.last() {
-                                if let Some(inst) = game.world.get_mut(id) {
-                                    inst.props.flipped = !inst.props.flipped;
-                                }
-                            }
+                    // ── Bin navigation (always in build mode) ──
+                    KeyCode::Char('j') if game.mode == Mode::Build => {
+                        if !game.bin.is_empty() {
+                            game.selected_bin = (game.selected_bin + 1) % game.bin.len();
                         }
-
-                        // Delete last placed part
-                        KeyCode::Char('d') | KeyCode::Delete if game.mode == Mode::Build => {
-                            if let Some(&id) = game.player_instances.last() {
-                                game.return_to_bin(id);
-                            }
-                        }
-
-                        // Move last placed part with arrow keys
-                        KeyCode::Left if game.mode == Mode::Build => {
-                            if let Some(&id) = game.player_instances.last() {
-                                if let Some(inst) = game.world.get_mut(id) {
-                                    inst.x -= 8.0;
-                                }
-                            }
-                        }
-                        KeyCode::Right if game.mode == Mode::Build => {
-                            if let Some(&id) = game.player_instances.last() {
-                                if let Some(inst) = game.world.get_mut(id) {
-                                    inst.x += 8.0;
-                                }
-                            }
-                        }
-                        KeyCode::Up if game.mode == Mode::Build && !game.player_instances.is_empty() => {
-                            if let Some(&id) = game.player_instances.last() {
-                                if let Some(inst) = game.world.get_mut(id) {
-                                    inst.y -= 8.0;
-                                }
-                            }
-                        }
-                        KeyCode::Down if game.mode == Mode::Build && !game.player_instances.is_empty() => {
-                            if let Some(&id) = game.player_instances.last() {
-                                if let Some(inst) = game.world.get_mut(id) {
-                                    inst.y += 8.0;
-                                }
-                            }
-                        }
-
-                        _ => {}
                     }
-                }
-                Event::Mouse(MouseEvent { kind, column, row, .. }) => {
-                    match kind {
-                        MouseEventKind::Down(MouseButton::Left) if game.mode == Mode::Build => {
-                            let (wx, wy) = game.screen_to_world(column, row);
-                            // Check if clicking on an existing player part
-                            if let Some(id) = game.instance_at(wx, wy) {
-                                if game.player_instances.contains(&id) {
-                                    let inst = game.world.get(id).unwrap();
-                                    game.dragging = Some(DragState {
-                                        instance_id: id,
-                                        offset_x: wx - inst.x,
-                                        offset_y: wy - inst.y,
-                                    });
-                                }
-                            } else {
-                                // Place new part from bin
-                                if let Some(id) = game.place_from_bin(wx, wy) {
-                                    let inst = game.world.get(id).unwrap();
-                                    game.dragging = Some(DragState {
-                                        instance_id: id,
-                                        offset_x: inst.props.width / 2.0,
-                                        offset_y: inst.props.height / 2.0,
-                                    });
-                                }
-                            }
+                    KeyCode::Char('k') if game.mode == Mode::Build => {
+                        if !game.bin.is_empty() {
+                            game.selected_bin = (game.selected_bin + game.bin.len() - 1) % game.bin.len();
                         }
-                        MouseEventKind::Drag(MouseButton::Left) if game.mode == Mode::Build => {
-                            if let Some(ref drag) = game.dragging {
-                                let (wx, wy) = game.screen_to_world(column, row);
-                                let id = drag.instance_id;
-                                let ox = drag.offset_x;
-                                let oy = drag.offset_y;
-                                if let Some(inst) = game.world.get_mut(id) {
-                                    inst.x = wx - ox;
-                                    inst.y = wy - oy;
-                                }
-                            }
-                        }
-                        MouseEventKind::Up(MouseButton::Left) => {
-                            game.dragging = None;
-                        }
-                        MouseEventKind::Down(MouseButton::Right) if game.mode == Mode::Build => {
-                            // Right-click: delete part under cursor
-                            let (wx, wy) = game.screen_to_world(column, row);
-                            if let Some(id) = game.instance_at(wx, wy) {
-                                if game.player_instances.contains(&id) {
-                                    game.return_to_bin(id);
-                                }
-                            }
-                        }
-                        _ => {}
                     }
+
+                    // ── Arrow keys ──
+                    KeyCode::Left if game.mode == Mode::Build => {
+                        let step = game.move_step();
+                        match game.focus {
+                            BuildFocus::Cursor => game.cursor_x = (game.cursor_x - step).max(0.0),
+                            BuildFocus::MovingPart(id) => {
+                                if let Some(inst) = game.world.get_mut(id) {
+                                    inst.x -= step;
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Right if game.mode == Mode::Build => {
+                        let step = game.move_step();
+                        match game.focus {
+                            BuildFocus::Cursor => game.cursor_x = (game.cursor_x + step).min(CANVAS_W as f32),
+                            BuildFocus::MovingPart(id) => {
+                                if let Some(inst) = game.world.get_mut(id) {
+                                    inst.x += step;
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Up if game.mode == Mode::Build => {
+                        let step = game.move_step();
+                        match game.focus {
+                            BuildFocus::Cursor => game.cursor_y = (game.cursor_y - step).max(0.0),
+                            BuildFocus::MovingPart(id) => {
+                                if let Some(inst) = game.world.get_mut(id) {
+                                    inst.y -= step;
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Down if game.mode == Mode::Build => {
+                        let step = game.move_step();
+                        match game.focus {
+                            BuildFocus::Cursor => game.cursor_y = (game.cursor_y + step).min(CANVAS_H as f32),
+                            BuildFocus::MovingPart(id) => {
+                                if let Some(inst) = game.world.get_mut(id) {
+                                    inst.y += step;
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Place part ──
+                    KeyCode::Enter if game.mode == Mode::Build => {
+                        match game.focus {
+                            BuildFocus::Cursor => game.place_from_bin(),
+                            BuildFocus::MovingPart(_) => {
+                                game.focus = BuildFocus::Cursor;
+                                game.set_status("Part placed.");
+                            }
+                        }
+                    }
+
+                    // ── Deselect ──
+                    KeyCode::Esc if game.mode == Mode::Build => {
+                        game.focus = BuildFocus::Cursor;
+                    }
+
+                    // ── Tab: cycle through placed parts ──
+                    KeyCode::Tab if game.mode == Mode::Build => {
+                        if !game.player_instances.is_empty() {
+                            let next = match game.focus {
+                                BuildFocus::Cursor => 0,
+                                BuildFocus::MovingPart(id) => {
+                                    let pos = game.player_instances.iter().position(|i| *i == id).unwrap_or(0);
+                                    (pos + 1) % game.player_instances.len()
+                                }
+                            };
+                            let id = game.player_instances[next];
+                            game.focus = BuildFocus::MovingPart(id);
+                            // Move cursor to part center
+                            if let Some(inst) = game.world.get(id) {
+                                game.cursor_x = inst.x + inst.props.width / 2.0;
+                                game.cursor_y = inst.y + inst.props.height / 2.0;
+                            }
+                            let name = game.world.get(id).map(|i| i.def().name()).unwrap_or("?");
+                            game.set_status(&format!("Selected: {}", name));
+                        }
+                    }
+
+                    // ── Flip ──
+                    KeyCode::Char('f') if game.mode == Mode::Build => {
+                        if let BuildFocus::MovingPart(id) = game.focus {
+                            if let Some(inst) = game.world.get_mut(id) {
+                                inst.props.flipped = !inst.props.flipped;
+                                game.set_status("Flipped.");
+                            }
+                        }
+                    }
+
+                    // ── Delete ──
+                    KeyCode::Char('d') | KeyCode::Delete if game.mode == Mode::Build => {
+                        game.delete_selected();
+                    }
+
+                    _ => {}
                 }
-                Event::Resize(_, _) => {}
-                _ => {}
             }
         }
     }
 
-    // Cleanup
-    crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
     execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
     Ok(())
