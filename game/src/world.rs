@@ -104,4 +104,60 @@ impl World {
             None
         }
     }
+
+    /// Snapshot all instance positions/velocities/states for sim reset.
+    pub fn snapshot(&self) -> Vec<InstanceSnapshot> {
+        self.instances
+            .iter()
+            .map(|inst| InstanceSnapshot {
+                id: inst.id,
+                x: inst.x,
+                y: inst.y,
+                vx: inst.vx,
+                vy: inst.vy,
+                state: inst.props.current_state,
+                flipped: inst.props.flipped,
+            })
+            .collect()
+    }
+
+    /// Restore all instances from a snapshot.
+    pub fn restore(&mut self, snapshots: &[InstanceSnapshot]) {
+        for snap in snapshots {
+            if let Some(inst) = self.get_mut(snap.id) {
+                inst.x = snap.x;
+                inst.y = snap.y;
+                inst.vx = snap.vx;
+                inst.vy = snap.vy;
+                inst.props.current_state = snap.state;
+                inst.props.flipped = snap.flipped;
+            }
+        }
+    }
+
+    /// Check if an instance has exited the visible world bounds.
+    pub fn is_off_screen(&self, id: InstanceId) -> bool {
+        if let Some(inst) = self.get(id) {
+            let cw = crate::constants::CANVAS_W as f32;
+            let ch = crate::constants::CANVAS_H as f32;
+            inst.x + inst.props.width < -50.0
+                || inst.x > cw + 50.0
+                || inst.y + inst.props.height < -50.0
+                || inst.y > ch + 50.0
+        } else {
+            true // removed = off screen
+        }
+    }
+}
+
+/// Saved position/state for simulation reset.
+#[derive(Debug, Clone)]
+pub struct InstanceSnapshot {
+    pub id: InstanceId,
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,
+    pub vy: f32,
+    pub state: usize,
+    pub flipped: bool,
 }

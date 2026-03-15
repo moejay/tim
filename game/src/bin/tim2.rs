@@ -22,6 +22,7 @@ use tim2::physics;
 use tim2::puzzle::*;
 use tim2::render::braille;
 use tim2::world::*;
+use tim2::world::InstanceSnapshot;
 
 // ── Game State ──────────────────────────────────────────────────
 
@@ -47,6 +48,9 @@ struct Game {
 
     // Player-placed instance IDs (for removal on reset)
     player_instances: Vec<InstanceId>,
+
+    // Snapshot for sim reset (taken when sim starts)
+    snapshot: Vec<InstanceSnapshot>,
 
     // Playfield area in terminal coords (set during render)
     playfield_rect: Rect,
@@ -93,35 +97,24 @@ impl Game {
             selected_bin: 0,
             dragging: None,
             player_instances: Vec::new(),
+            snapshot: Vec::new(),
             playfield_rect: Rect::default(),
         }
     }
 
     fn start_sim(&mut self) {
         if self.mode == Mode::Build {
+            // Take snapshot of all positions before running
+            self.snapshot = self.world.snapshot();
             self.mode = Mode::Running;
-            // Snapshot velocities to zero for all player parts
-            for id in &self.player_instances {
-                if let Some(inst) = self.world.get_mut(*id) {
-                    inst.vx = 0.0;
-                    inst.vy = 0.0;
-                    inst.props.current_state = 0;
-                }
-            }
         }
     }
 
     fn stop_sim(&mut self) {
-        self.mode = Mode::Build;
-        // Reset all dynamic parts to initial state
-        // For simplicity: remove player parts and re-place them at stored positions
-        // (In a full impl we'd snapshot/restore. For now, just stop physics.)
-        for inst in &mut self.world.instances {
-            if !inst.def().physics().is_static {
-                inst.vx = 0.0;
-                inst.vy = 0.0;
-                inst.props.current_state = 0;
-            }
+        if self.mode == Mode::Running {
+            // Restore everything to pre-sim positions
+            self.world.restore(&self.snapshot);
+            self.mode = Mode::Build;
         }
     }
 
@@ -135,7 +128,7 @@ impl Game {
             entry.placed = 0;
         }
         self.mode = Mode::Build;
-        // Reset all fixed parts state
+        // Reset all parts to initial state
         for inst in &mut self.world.instances {
             inst.vx = 0.0;
             inst.vy = 0.0;
@@ -214,87 +207,82 @@ impl Game {
     }
 }
 
-// ── First Puzzle ─────────────────────────────────────────────────
+// ── Puzzle #1: Knock the eight ball off the screen ───────────────
+// From the original TIM2 manual (page 9):
+// "All you have to do is put the superball under the eight ball."
 
-fn build_tutorial_puzzle() -> (World, Puzzle) {
+fn build_puzzle_1() -> (World, Puzzle) {
     use tim2::parts::balls::BallType;
     use tim2::parts::walls::WallType;
 
     let mut world = World::new();
 
-    // Floor
+    // Helper to set wall dimensions
+    let set_size = |w: &mut World, width: f32, height: f32| {
+        if let Some(inst) = w.instances.last_mut() {
+            inst.props.width = width;
+            inst.props.height = height;
+        }
+    };
+
+    // ── Floor ──
     world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 340.0);
-    if let Some(inst) = world.instances.last_mut() {
-        inst.props.width = 640.0;
-        inst.props.height = 20.0;
+    set_size(&mut world, 640.0, 20.0);
+
+    // ── Brick columns flanking the 8-ball (decorative, frame the play area) ──
+    world.spawn_locked(PartId::Wall(WallType::BrickWall), 430.0, 100.0);
+    set_size(&mut world, 16.0, 240.0);
+    world.spawn_locked(PartId::Wall(WallType::BrickWall), 520.0, 100.0);
+    set_size(&mut world, 16.0, 240.0);
+
+    // ── Scattered fixed balls (decoration, like original layout) ──
+    world.spawn_locked(PartId::Ball(BallType::BowlingBall), 50.0, 180.0);
+    world.spawn_locked(PartId::Ball(BallType::Basketball), 100.0, 180.0);
+    world.spawn_locked(PartId::Ball(BallType::SoccerBall), 145.0, 180.0);
+    world.spawn_locked(PartId::Ball(BallType::Baseball), 185.0, 185.0);
+    world.spawn_locked(PartId::Ball(BallType::TennisBall), 215.0, 188.0);
+    world.spawn_locked(PartId::Ball(BallType::Pinball), 250.0, 185.0);
+    world.spawn_locked(PartId::Ball(BallType::Basketball), 285.0, 180.0);
+    world.spawn_locked(PartId::Ball(BallType::SoccerBall), 330.0, 180.0);
+
+    // ── The 8-ball (pool ball) floating between the columns ──
+    // Pool ball has ZeroGravity — it hangs in the air until struck
+    let eightball_id = world.spawn_locked(PartId::Ball(BallType::PoolBall), 470.0, 140.0);
+    if let Some(inst) = world.get_mut(eightball_id) {
+        inst.props.values.insert("surface_number".to_string(), 8.0);
     }
 
-    // Left wall
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 0.0);
-    if let Some(inst) = world.instances.last_mut() {
-        inst.props.width = 10.0;
-        inst.props.height = 340.0;
-    }
-
-    // Right wall
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 630.0, 0.0);
-    if let Some(inst) = world.instances.last_mut() {
-        inst.props.width = 10.0;
-        inst.props.height = 340.0;
-    }
-
-    // Platform (shelf) on right side
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 400.0, 240.0);
-    if let Some(inst) = world.instances.last_mut() {
-        inst.props.width = 120.0;
-        inst.props.height = 10.0;
-    }
-
-    // Target zone indicator — a small platform/bucket area bottom-left
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 60.0, 320.0);
-    if let Some(inst) = world.instances.last_mut() {
-        inst.props.width = 80.0;
-        inst.props.height = 10.0;
-    }
-    // Left lip
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 55.0, 300.0);
-    if let Some(inst) = world.instances.last_mut() {
-        inst.props.width = 8.0;
-        inst.props.height = 30.0;
-    }
-    // Right lip
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 137.0, 300.0);
-    if let Some(inst) = world.instances.last_mut() {
-        inst.props.width = 8.0;
-        inst.props.height = 30.0;
-    }
-
-    // Pre-place a bowling ball on the shelf (this is the "fixed" ball)
-    let ball_id = world.spawn_locked(PartId::Ball(BallType::BowlingBall), 440.0, 200.0);
-    // Unlock it so physics affects it (locked just means player can't move it)
-
-    // The ball should still be affected by physics, so set locked but not static
-    // Actually "locked" in our world means "player can't drag it", physics still applies
-
+    // ── Puzzle definition ──
     let mut puzzle = Puzzle::new(
-        "First Steps",
-        "Get the bowling ball into the basket (bottom-left)!",
+        "Puzzle #1",
+        "Knock the eight ball off the screen.",
     );
 
-    // Win: bowling ball center within the basket region, at rest
-    puzzle.win_conditions.push(WinCondition::ObjectAtPosition {
-        instance_id: ball_id,
-        region: (60.0, 280.0, 140.0, 340.0),
+    // Win: the 8-ball exits the screen (any edge)
+    puzzle.win_conditions.push(WinCondition::ObjectExitedWorld {
+        instance_id: eightball_id,
+        edge: WorldEdge::Any,
     });
 
-    // Player gets some walls/inclines to build a path
+    // Player's parts bin
+    // Solution: place super ball (elasticity 1.1) under the 8-ball.
+    // It bounces on the floor gaining height until it hits the 8-ball.
+    // Extra balls are decoys (like the original).
     puzzle.bin_parts.push(BinPart {
-        part_id: PartId::Wall(WallType::WoodenWall),
-        quantity: 3,
+        part_id: PartId::Ball(BallType::SuperBall),
+        quantity: 1,
     });
     puzzle.bin_parts.push(BinPart {
-        part_id: PartId::Incline(tim2::parts::inclines::InclineType::BrickIncline),
-        quantity: 2,
+        part_id: PartId::Ball(BallType::Basketball),
+        quantity: 1,
+    });
+    puzzle.bin_parts.push(BinPart {
+        part_id: PartId::Ball(BallType::SoccerBall),
+        quantity: 1,
+    });
+    puzzle.bin_parts.push(BinPart {
+        part_id: PartId::Ball(BallType::TennisBall),
+        quantity: 1,
     });
 
     (world, puzzle)
@@ -459,7 +447,7 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Build puzzle
-    let (world, puzzle) = build_tutorial_puzzle();
+    let (world, puzzle) = build_puzzle_1();
     let mut game = Game::new(world, puzzle);
 
     let tick_duration = Duration::from_millis(1000 / TARGET_FPS as u64);
