@@ -8,7 +8,7 @@ use crossterm::{
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use image::{imageops, RgbaImage};
+use image::RgbaImage;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -349,87 +349,87 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
         f.render_widget(goal, goal_area);
 
         // ── Playfield ──
-        // Render at full canvas resolution, let braille downscale
-        let mut img = RgbaImage::from_pixel(CANVAS_W, CANVAS_H, image::Rgba(BG_COLOR));
-
-        // Grid
-        for gx in (0..CANVAS_W).step_by(GRID_SIZE as usize) {
-            for py in 0..CANVAS_H as i32 {
-                pixel_gfx::blend_pixel(&mut img, gx as i32, py, GRID_COLOR);
-            }
-        }
-        for gy in (0..CANVAS_H).step_by(GRID_SIZE as usize) {
-            for px in 0..CANVAS_W as i32 {
-                pixel_gfx::blend_pixel(&mut img, px, gy as i32, GRID_COLOR);
-            }
-        }
-
-        // Draw all parts
-        for inst in &game.world.instances {
-            let def = inst.def();
-            def.draw_pixel(&mut img, inst.x, inst.y, &inst.props, game.frame);
-
-            // Highlight selected part with border
-            if let BuildFocus::MovingPart(sel_id) = game.focus {
-                if inst.id == sel_id {
-                    let (x1, y1, x2, y2) = inst.bounds();
-                    let highlight = [0, 255, 255, 180];
-                    for x in (x1 as i32)..(x2 as i32) {
-                        pixel_gfx::blend_pixel(&mut img, x, y1 as i32 - 1, highlight);
-                        pixel_gfx::blend_pixel(&mut img, x, y2 as i32, highlight);
-                    }
-                    for y in (y1 as i32)..(y2 as i32) {
-                        pixel_gfx::blend_pixel(&mut img, x1 as i32 - 1, y, highlight);
-                        pixel_gfx::blend_pixel(&mut img, x2 as i32, y, highlight);
-                    }
-                }
-            }
-        }
-
-        // Draw cursor crosshair in build mode
-        if game.mode == Mode::Build {
-            let cx = game.cursor_x as i32;
-            let cy = game.cursor_y as i32;
-            let cross_color = if matches!(game.focus, BuildFocus::Cursor) {
-                [255, 255, 0, 200]
-            } else {
-                [100, 100, 100, 120]
-            };
-            for d in 3..12 {
-                pixel_gfx::blend_pixel(&mut img, cx - d, cy, cross_color);
-                pixel_gfx::blend_pixel(&mut img, cx + d, cy, cross_color);
-                pixel_gfx::blend_pixel(&mut img, cx, cy - d, cross_color);
-                pixel_gfx::blend_pixel(&mut img, cx, cy + d, cross_color);
-            }
-        }
-
-        // Win overlay
-        if game.mode == Mode::Won {
-            // Semi-transparent green overlay
-            for y in 0..CANVAS_H as i32 {
-                for x in 0..CANVAS_W as i32 {
-                    pixel_gfx::blend_pixel(&mut img, x, y, [0, 60, 0, 100]);
-                }
-            }
-            // "PUZZLE COMPLETE!" text in center
-            let text = "PUZZLE COMPLETE!";
-            let tx = (CANVAS_W as i32 / 2) - (text.len() as i32 * 6 / 2);
-            let ty = CANVAS_H as i32 / 2 - 4;
-            pixel_gfx::draw_text(&mut img, tx, ty, text, [50, 255, 50, 255], 2);
-        }
-
-        // Render border + braille
+        // Render directly at braille resolution (2px per col, 4px per row)
         let pf_block = Block::default()
             .borders(Borders::ALL)
             .title(format!(" {} ", game.puzzle.title));
         let pf_inner = pf_block.inner(playfield_area);
         f.render_widget(pf_block, playfield_area);
 
-        // Downscale 640x360 canvas to fit the terminal braille area
-        let target_w = (pf_inner.width as u32 * 2).max(1);
-        let target_h = (pf_inner.height as u32 * 4).max(1);
-        let scaled = imageops::resize(&img, target_w, target_h, imageops::FilterType::Nearest);
-        braille::render_braille(&scaled, f.buffer_mut(), pf_inner);
+        let pw = (pf_inner.width as u32 * 2).max(2);
+        let ph = (pf_inner.height as u32 * 4).max(4);
+        let mut img = RgbaImage::from_pixel(pw, ph, image::Rgba(BG_COLOR));
+
+        // Scale factors: map world coords (640x360) to pixel buffer
+        let sx = pw as f32 / CANVAS_W as f32;
+        let sy = ph as f32 / CANVAS_H as f32;
+
+        // Grid (scaled)
+        for gx in (0..CANVAS_W).step_by(GRID_SIZE as usize) {
+            let px = (gx as f32 * sx) as i32;
+            for py in 0..ph as i32 {
+                pixel_gfx::blend_pixel(&mut img, px, py, GRID_COLOR);
+            }
+        }
+        for gy in (0..CANVAS_H).step_by(GRID_SIZE as usize) {
+            let py = (gy as f32 * sy) as i32;
+            for px in 0..pw as i32 {
+                pixel_gfx::blend_pixel(&mut img, px, py, GRID_COLOR);
+            }
+        }
+
+        // Draw all parts (scaled positions + sizes)
+        for inst in &game.world.instances {
+            let def = inst.def();
+            let mut scaled_props = inst.props.clone();
+            scaled_props.width *= sx;
+            scaled_props.height *= sy;
+            def.draw_pixel(&mut img, inst.x * sx, inst.y * sy, &scaled_props, game.frame);
+
+            // Highlight selected part
+            if let BuildFocus::MovingPart(sel_id) = game.focus {
+                if inst.id == sel_id {
+                    let x1 = (inst.x * sx) as i32;
+                    let y1 = (inst.y * sy) as i32;
+                    let x2 = x1 + scaled_props.width as i32;
+                    let y2 = y1 + scaled_props.height as i32;
+                    let hl = [0, 255, 255, 220];
+                    for x in x1..x2 { pixel_gfx::blend_pixel(&mut img, x, y1 - 1, hl); pixel_gfx::blend_pixel(&mut img, x, y2, hl); }
+                    for y in y1..y2 { pixel_gfx::blend_pixel(&mut img, x1 - 1, y, hl); pixel_gfx::blend_pixel(&mut img, x2, y, hl); }
+                }
+            }
+        }
+
+        // Cursor crosshair (scaled)
+        if game.mode == Mode::Build {
+            let cx = (game.cursor_x * sx) as i32;
+            let cy = (game.cursor_y * sy) as i32;
+            let cc = if matches!(game.focus, BuildFocus::Cursor) { [255, 255, 0, 255] } else { [100, 100, 100, 150] };
+            let arm = (8.0 * sx.min(sy)) as i32;
+            for d in 2..arm.max(4) {
+                pixel_gfx::blend_pixel(&mut img, cx - d, cy, cc);
+                pixel_gfx::blend_pixel(&mut img, cx + d, cy, cc);
+                pixel_gfx::blend_pixel(&mut img, cx, cy - d, cc);
+                pixel_gfx::blend_pixel(&mut img, cx, cy + d, cc);
+            }
+        }
+
+        // Win overlay
+        if game.mode == Mode::Won {
+            for y in 0..ph as i32 {
+                for x in 0..pw as i32 {
+                    pixel_gfx::blend_pixel(&mut img, x, y, [0, 80, 0, 120]);
+                }
+            }
+            let text = "PUZZLE COMPLETE!";
+            let scale = (sx * 3.0).max(1.0) as u32;
+            let char_w = 6 * scale as i32;
+            let tx = (pw as i32 / 2) - (text.len() as i32 * char_w / 2);
+            let ty = ph as i32 / 2 - (4 * scale as i32);
+            pixel_gfx::draw_text(&mut img, tx, ty, text, [80, 255, 80, 255], scale);
+        }
+
+        braille::render_braille(&img, f.buffer_mut(), pf_inner);
 
         // ── Parts Bin ──
         let mut bin_lines: Vec<Line> = Vec::new();

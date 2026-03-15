@@ -141,7 +141,7 @@ impl PartDef for ElectricalType {
     }
 
     fn draw_pixel(&self, img: &mut RgbaImage, x: f32, y: f32, props: &PartProps, frame: u64) {
-        let (w, h) = self.default_size();
+        let (w, h) = (props.width, props.height);
         let ix = x as i32;
         let iy = y as i32;
         let ic = self.icon_color();

@@ -171,7 +171,7 @@ impl PartDef for AnimalType {
             AnimalType::PokeyCat => {
                 // State 0=Idle, 1=Walking, 2=Chasing, 3=Startled
                 // Flippable: initial facing direction (left or right)
-                let (w, _h) = self.default_size();
+                let (w, _h) = (props.width, props.height);
                 let fur_color = if props.current_state == 3 {
                     [255, 200, 80, 255] // Brighter when startled
                 } else {
@@ -219,7 +219,7 @@ impl PartDef for AnimalType {
             AnimalType::MortMouse => {
                 // State 0=Idle, 1=Fleeing, 2=SeekingCheese, 3=Eaten, 4=Safe
                 // Flippable: initial facing direction
-                let (mw, _mh) = self.default_size();
+                let (mw, _mh) = (props.width, props.height);
                 let mx = |offset: f32| -> f32 {
                     if props.flipped { x + mw - offset } else { x + offset }
                 };
@@ -267,7 +267,7 @@ impl PartDef for AnimalType {
             AnimalType::EdisonAlligator => {
                 // State 0=Idle (tail bouncing), 1=Snapping, 2=Laughing
                 // Flippable: jaw faces left (default) or right
-                let (aw, _ah) = self.default_size();
+                let (aw, _ah) = (props.width, props.height);
                 let mx = |offset: i32| -> i32 {
                     if props.flipped { ix + aw as i32 - 1 - offset } else { ix + offset }
                 };
@@ -319,7 +319,7 @@ impl PartDef for AnimalType {
             AnimalType::MelSchlemming => {
                 // State 0=Walking, 1=Running, 2=Stationary, 3=EnteringHouse, 4=Dead
                 // Flippable: initial walking direction
-                let (mw, _mh) = self.default_size();
+                let (mw, _mh) = (props.width, props.height);
                 let mx = |offset: f32| -> f32 {
                     if props.flipped { x + mw - offset } else { x + offset }
                 };
