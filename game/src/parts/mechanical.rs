@@ -29,6 +29,7 @@ pub enum MechanicalType {
     VacuumCleaner,
     PinballBumper,
     Tack,
+    Bellows,
 }
 
 impl PartDef for MechanicalType {
@@ -54,6 +55,7 @@ impl PartDef for MechanicalType {
             MechanicalType::VacuumCleaner => "Vacuum Cleaner",
             MechanicalType::PinballBumper => "Pinball Bumper",
             MechanicalType::Tack => "Tack",
+            MechanicalType::Bellows => "Bike Pump (Bellows)",
         }
     }
 
@@ -79,6 +81,7 @@ impl PartDef for MechanicalType {
             MechanicalType::VacuumCleaner => "Requires power; sucks objects in ~60px radius",
             MechanicalType::PinballBumper => "Bounces objects away at ~800 px/s",
             MechanicalType::Tack => "Pops balloons on contact; forms walking surfaces",
+            MechanicalType::Bellows => "Air burst when compressed; blows objects/spins windmills; flippable",
         }
     }
 
@@ -106,6 +109,7 @@ impl PartDef for MechanicalType {
             MechanicalType::VacuumCleaner => (40.0, 32.0),
             MechanicalType::PinballBumper => (24.0, 24.0),
             MechanicalType::Tack => (8.0, 8.0),
+            MechanicalType::Bellows => (32.0, 24.0),
         }
     }
 
@@ -128,6 +132,7 @@ impl PartDef for MechanicalType {
             MechanicalType::VacuumCleaner => 'V',
             MechanicalType::PinballBumper => '\u{25C9}',
             MechanicalType::Tack => '\u{25B4}',
+            MechanicalType::Bellows => '\u{25C4}',
         }
     }
 
@@ -143,6 +148,7 @@ impl PartDef for MechanicalType {
             MechanicalType::BoxingGlove => RED,
             MechanicalType::VacuumCleaner => BLUE,
             MechanicalType::PinballBumper => YELLOW,
+            MechanicalType::Bellows => BROWN,
         }
     }
 
@@ -207,6 +213,11 @@ impl PartDef for MechanicalType {
             MechanicalType::ConveyorBelt => vec![
                 StateDef { name: "Idle", description: "Not belt-driven" },
                 StateDef { name: "Running", description: "Belt-driven, moving objects" },
+            ],
+            MechanicalType::Bellows => vec![
+                StateDef { name: "Open", description: "Handle up — ready to compress" },
+                StateDef { name: "Compressed", description: "Handle pushed down — emitting air burst" },
+                StateDef { name: "Spent", description: "Fully compressed — no more air" },
             ],
             MechanicalType::Trampoline => vec![
                 StateDef { name: "Idle", description: "Surface at rest" },
@@ -549,8 +560,42 @@ impl PartDef for MechanicalType {
                 fill_circle(img, cx, cy, 2.0, [150, 150, 160, 255]);
                 fill_rect(img, ix, iy + 3, 8, 6, [180, 180, 190, 255]);
             }
+            MechanicalType::Bellows => {
+                // State 0=Open, 1=Compressed, 2=Spent
+                // Flippable: air blows left or right
+                let dir: i32 = if props.flipped { -1 } else { 1 };
+                let compress = match props.current_state {
+                    1 => 8, // compressed
+                    2 => 12, // fully spent
+                    _ => 0, // open
+                };
+                // Accordion body — narrows when compressed
+                let body_w = (w as i32 - 8 - compress).max(4);
+                let body_x = if props.flipped { ix + w as i32 - body_w - 4 } else { ix + 4 };
+                fill_rect(img, body_x, iy + 4, body_w, h as i32 - 8, [ic[0], ic[1], ic[2], 255]);
+                // Accordion folds
+                for fold in (0..body_w).step_by(4) {
+                    draw_line(img, body_x + fold, iy + 4, body_x + fold, iy + h as i32 - 4,
+                        [ic[0].saturating_sub(30), ic[1].saturating_sub(30), ic[2].saturating_sub(30), 200]);
+                }
+                // Handle/top plate
+                let handle_x = if props.flipped { body_x + body_w } else { body_x - 4 };
+                fill_rect(img, handle_x, iy + 2, 6, h as i32 - 4, [100, 70, 40, 255]);
+                // Nozzle
+                let nozzle_x = if props.flipped { ix } else { ix + w as i32 - 4 };
+                fill_rect(img, nozzle_x, iy + 8, 4, 8, [120, 120, 130, 255]);
+                // Air burst when compressed
+                if props.current_state == 1 {
+                    let air_x = if props.flipped { ix - 4 } else { ix + w as i32 };
+                    for i in 0..4 {
+                        let ax = air_x + dir * (i * 4 + ((frame as i32 * 2) % 4));
+                        let alpha = (180 - i * 40) as u8;
+                        draw_line(img, ax, iy + 8, ax, iy + 16, [200, 220, 255, alpha]);
+                    }
+                }
+            }
             _ => {
-                // Pulley, Belt, TransRotoMatic, RotoTransConverter, TipsyTrailer, Tack
+                // Pulley, Belt, TransRotoMatic, RotoTransConverter, TipsyTrailer
                 fill_rect(img, ix, iy, w as i32, h as i32, [ic[0], ic[1], ic[2], 200]);
                 draw_line(img, ix, iy, ix + w as i32 - 1, iy, [ic[0].saturating_add(30), ic[1].saturating_add(30), ic[2].saturating_add(30), 255]);
                 draw_line(img, ix, iy + h as i32 - 1, ix + w as i32 - 1, iy + h as i32 - 1, [ic[0].saturating_sub(30), ic[1].saturating_sub(30), ic[2].saturating_sub(30), 255]);
@@ -593,7 +638,7 @@ impl PartDef for MechanicalType {
     }
 
     fn is_flippable(&self) -> bool {
-        matches!(self, MechanicalType::Windmill | MechanicalType::BoxingGlove | MechanicalType::JackInTheBox | MechanicalType::MouseExerciseWheel)
+        matches!(self, MechanicalType::Windmill | MechanicalType::BoxingGlove | MechanicalType::JackInTheBox | MechanicalType::MouseExerciseWheel | MechanicalType::Bellows)
     }
 
     fn requires_power(&self) -> bool {
@@ -605,6 +650,6 @@ impl PartDef for MechanicalType {
     }
 
     fn can_be_ramp(&self) -> bool {
-        matches!(self, MechanicalType::TeeterTotter | MechanicalType::PinballBumper | MechanicalType::VacuumCleaner)
+        matches!(self, MechanicalType::TeeterTotter | MechanicalType::PinballBumper | MechanicalType::VacuumCleaner | MechanicalType::Bellows)
     }
 }

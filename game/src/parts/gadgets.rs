@@ -28,6 +28,7 @@ pub enum GadgetType {
     CardboardBox,
     ColorBlock,
     MessageComputer,
+    Teapot,
 }
 
 impl PartDef for GadgetType {
@@ -52,6 +53,7 @@ impl PartDef for GadgetType {
             GadgetType::CardboardBox => "Cardboard Box",
             GadgetType::ColorBlock => "Color Block",
             GadgetType::MessageComputer => "Message Computer",
+            GadgetType::Teapot => "Teapot",
         }
     }
 
@@ -76,6 +78,7 @@ impl PartDef for GadgetType {
             GadgetType::CardboardBox => "Mass 0.1; crumples on any significant impact; holds small objects",
             GadgetType::ColorBlock => "Decorative 16x16 block; 44 color options; solid collision",
             GadgetType::MessageComputer => "Displays single character (A-Z, 0-9, symbols); decorative",
+            GadgetType::Teapot => "Dynamic; produces steam up-left/up-right when heated; recoil; spins windmills",
         }
     }
 
@@ -102,6 +105,7 @@ impl PartDef for GadgetType {
             GadgetType::CardboardBox => (24.0, 24.0),
             GadgetType::ColorBlock => (16.0, 16.0),
             GadgetType::MessageComputer => (16.0, 24.0),
+            GadgetType::Teapot => (24.0, 20.0),
         }
     }
 
@@ -122,6 +126,7 @@ impl PartDef for GadgetType {
             GadgetType::MetalBox => '\u{25A3}',
             GadgetType::ColorBlock => '\u{2588}',
             GadgetType::MessageComputer => '\u{23CD}',
+            GadgetType::Teapot => '\u{2615}',
         }
     }
 
@@ -143,6 +148,7 @@ impl PartDef for GadgetType {
             GadgetType::CardboardBox => [190, 160, 110],
             GadgetType::ColorBlock => WHITE,
             GadgetType::MessageComputer => GREEN,
+            GadgetType::Teapot => SILVER,
         }
     }
 
@@ -186,6 +192,10 @@ impl PartDef for GadgetType {
             },
             GadgetType::CardboardBox => PhysicsProps {
                 mass: 0.1, elasticity: 0.05, density: 0.2, friction: 0.5,
+                gravity_response: GravityResponse::Normal, is_static: false,
+            },
+            GadgetType::Teapot => PhysicsProps {
+                mass: 0.4, elasticity: 0.1, density: 1.2, friction: 0.5,
                 gravity_response: GravityResponse::Normal, is_static: false,
             },
             _ => PhysicsProps {
@@ -244,6 +254,11 @@ impl PartDef for GadgetType {
             GadgetType::WoodenBox => vec![
                 StateDef { name: "Intact", description: "Solid container" },
                 StateDef { name: "Destroyed", description: "Destroyed by dynamite" },
+            ],
+            GadgetType::Teapot => vec![
+                StateDef { name: "Cold", description: "No heat source — idle" },
+                StateDef { name: "Heating", description: "Heat applied — water warming" },
+                StateDef { name: "Boiling", description: "Producing steam; recoil pushes teapot backward" },
             ],
             _ => vec![
                 StateDef { name: "Idle", description: "Default state" },
@@ -536,6 +551,49 @@ impl PartDef for GadgetType {
                 fill_circle(img, x + 8.0, y + 12.0, 3.0, [50, 220, 50, 255]);
                 draw_glow(img, x + 8.0, y + 12.0, 5.0, [50, 180, 50]);
             }
+            GadgetType::Teapot => {
+                // State 0=Cold, 1=Heating, 2=Boiling
+                // Flippable: steam direction (up-left vs up-right)
+                let steam_dir: i32 = if props.flipped { -1 } else { 1 };
+                // Body — round pot
+                fill_circle(img, x + 12.0, y + 12.0, 9.0, [200, 200, 210, 255]);
+                // Lid
+                fill_rect(img, ix + 6, iy + 2, 12, 3, [180, 180, 190, 255]);
+                fill_rect(img, ix + 10, iy, 4, 3, [160, 160, 170, 255]);
+                // Spout — direction depends on flip
+                let spout_x = if props.flipped { ix - 2 } else { ix + 20 };
+                draw_line(img, spout_x, iy + 8, spout_x + steam_dir * 4, iy + 4, [180, 180, 190, 255]);
+                draw_line(img, spout_x, iy + 9, spout_x + steam_dir * 4, iy + 5, [180, 180, 190, 255]);
+                // Handle — opposite side
+                let handle_x = if props.flipped { ix + 20 } else { ix - 2 };
+                draw_line(img, handle_x, iy + 8, handle_x, iy + 14, [160, 160, 170, 255]);
+                draw_line(img, handle_x, iy + 8, ix + 12, iy + 6, [160, 160, 170, 255]);
+                draw_line(img, handle_x, iy + 14, ix + 12, iy + 16, [160, 160, 170, 255]);
+                // Bottom
+                fill_rect(img, ix + 4, iy + 18, 16, 2, [180, 180, 190, 255]);
+                match props.current_state {
+                    1 => {
+                        // Heating — slight glow underneath
+                        draw_glow(img, x + 12.0, y + 20.0, 6.0, [255, 200, 100]);
+                    }
+                    2 => {
+                        // Boiling — steam from spout + lid rattling
+                        let steam_x = spout_x + steam_dir * 4;
+                        for i in 0..5 {
+                            let sx = steam_x as f32 + steam_dir as f32 * (i as f32 * 3.0 + ((frame as f32 * 0.15 + i as f32).sin() * 2.0));
+                            let sy = iy as f32 + 2.0 - i as f32 * 4.0 - ((frame as f32 * 0.1) % 4.0);
+                            let alpha = (180 - i * 30) as u8;
+                            fill_circle(img, sx, sy, 2.0 + i as f32 * 0.5, [220, 220, 230, alpha]);
+                        }
+                        // Lid rattling
+                        let rattle = ((frame as f32 * 0.4).sin() * 1.5) as i32;
+                        fill_rect(img, ix + 10 + rattle, iy - 1, 4, 3, [170, 170, 180, 255]);
+                        // Glow underneath
+                        draw_glow(img, x + 12.0, y + 20.0, 8.0, [255, 180, 80]);
+                    }
+                    _ => {}
+                }
+            }
             _ => {
                 fill_rect(img, ix, iy, w as i32, h as i32, [ic[0], ic[1], ic[2], 200]);
             }
@@ -578,11 +636,11 @@ impl PartDef for GadgetType {
     }
 
     fn has_animation(&self) -> bool {
-        matches!(self, GadgetType::EggTimer | GadgetType::AntiGravityPad | GadgetType::LeakyBucket)
+        matches!(self, GadgetType::EggTimer | GadgetType::AntiGravityPad | GadgetType::LeakyBucket | GadgetType::Teapot)
     }
 
     fn is_flippable(&self) -> bool {
-        matches!(self, GadgetType::SuperPhazer | GadgetType::Gun)
+        matches!(self, GadgetType::SuperPhazer | GadgetType::Gun | GadgetType::Teapot)
     }
 
     fn has_rope_point(&self) -> bool {
