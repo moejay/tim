@@ -234,7 +234,7 @@ impl Game {
     }
 
     fn move_step(&self) -> f32 {
-        4.0 // pixels per arrow press
+        GRID_SIZE as f32 / 2.0 // 16px per press = ~40 presses to cross screen
     }
 }
 
@@ -400,18 +400,31 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
             }
         }
 
-        // Cursor crosshair (scaled)
+        // Cursor crosshair (scaled) — drawn large enough to always be visible
         if game.mode == Mode::Build {
             let cx = (game.cursor_x * sx) as i32;
             let cy = (game.cursor_y * sy) as i32;
-            let cc = if matches!(game.focus, BuildFocus::Cursor) { [255, 255, 0, 255] } else { [100, 100, 100, 150] };
-            let arm = (8.0 * sx.min(sy)) as i32;
-            for d in 2..arm.max(4) {
+            let active = matches!(game.focus, BuildFocus::Cursor);
+            let cc = if active { [255, 255, 0, 255] } else { [120, 120, 120, 180] };
+            // Arms: at least 6 pixels long regardless of scale
+            let arm = 6_i32;
+            let gap = 1_i32;
+            for d in gap..=arm {
                 pixel_gfx::blend_pixel(&mut img, cx - d, cy, cc);
                 pixel_gfx::blend_pixel(&mut img, cx + d, cy, cc);
                 pixel_gfx::blend_pixel(&mut img, cx, cy - d, cc);
                 pixel_gfx::blend_pixel(&mut img, cx, cy + d, cc);
+                // Make it 2px thick for visibility
+                pixel_gfx::blend_pixel(&mut img, cx - d, cy + 1, cc);
+                pixel_gfx::blend_pixel(&mut img, cx + d, cy + 1, cc);
+                pixel_gfx::blend_pixel(&mut img, cx + 1, cy - d, cc);
+                pixel_gfx::blend_pixel(&mut img, cx + 1, cy + d, cc);
             }
+            // Center dot
+            pixel_gfx::blend_pixel(&mut img, cx, cy, cc);
+            pixel_gfx::blend_pixel(&mut img, cx + 1, cy, cc);
+            pixel_gfx::blend_pixel(&mut img, cx, cy + 1, cc);
+            pixel_gfx::blend_pixel(&mut img, cx + 1, cy + 1, cc);
         }
 
         // Win overlay
