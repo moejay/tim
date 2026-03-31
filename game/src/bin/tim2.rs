@@ -20,8 +20,7 @@ use tim2::constants::*;
 use tim2::parts::*;
 use tim2::physics;
 use tim2::puzzle::*;
-use tim2::render::braille;
-use tim2::render::pixel_gfx;
+use tim2::render::{braille, halfblock, pixel_gfx, detect_mode, RenderMode, TextSettings};
 use tim2::world::*;
 
 // ── Game State ──────────────────────────────────────────────────
@@ -299,7 +298,10 @@ fn build_puzzle_1() -> (World, Puzzle) {
 
 // ── Rendering ───────────────────────────────────────────────────
 
-fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mut Game) -> Result<()> {
+fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mut Game, render_mode: RenderMode, text_settings: TextSettings) -> Result<()> {
+    let mut pixel_img: Option<image::DynamicImage> = None;
+    let mut pf_inner_rect = Rect::default();
+
     terminal.draw(|f| {
         let size = f.area();
 
@@ -344,26 +346,46 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
                 Style::default().fg(Color::DarkGray),
             ));
         }
+        // Show render mode label
+        if render_mode == RenderMode::Text {
+            goal_spans.push(Span::styled(
+                format!("  [{}]", text_settings.label()),
+                Style::default().fg(Color::Magenta),
+            ));
+        } else {
+            goal_spans.push(Span::styled(
+                "  [Pixel]",
+                Style::default().fg(Color::Magenta),
+            ));
+        }
         let goal = Paragraph::new(Line::from(goal_spans))
             .block(Block::default().borders(Borders::BOTTOM));
         f.render_widget(goal, goal_area);
 
         // ── Playfield ──
-        // Render directly at braille resolution (2px per col, 4px per row)
         let pf_block = Block::default()
             .borders(Borders::ALL)
             .title(format!(" {} ", game.puzzle.title));
         let pf_inner = pf_block.inner(playfield_area);
         f.render_widget(pf_block, playfield_area);
+        pf_inner_rect = pf_inner;
 
-        let pw = (pf_inner.width as u32 * 2).max(2);
-        let ph = (pf_inner.height as u32 * 4).max(4);
+        // Image dimensions depend on render mode
+        let (pw, ph, sx, sy) = match render_mode {
+            RenderMode::Text => {
+                let (pw, ph) = text_settings.image_size(pf_inner.width as u32, pf_inner.height as u32);
+                let sx = pw as f32 / CANVAS_W as f32;
+                let sy = ph as f32 / CANVAS_H as f32;
+                (pw, ph, sx, sy)
+            }
+            RenderMode::Pixel => {
+                (CANVAS_W, CANVAS_H, 1.0_f32, 1.0_f32)
+            }
+        };
+
         let mut img = RgbaImage::from_pixel(pw, ph, image::Rgba(BG_COLOR));
 
         // Scale factors: map world coords (640x360) to pixel buffer
-        let sx = pw as f32 / CANVAS_W as f32;
-        let sy = ph as f32 / CANVAS_H as f32;
-
         // Grid (scaled)
         for gx in (0..CANVAS_W).step_by(GRID_SIZE as usize) {
             let px = (gx as f32 * sx) as i32;
@@ -406,9 +428,9 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
             let cy = (game.cursor_y * sy) as i32;
             let active = matches!(game.focus, BuildFocus::Cursor);
             let cc = if active { [255, 255, 0, 255] } else { [120, 120, 120, 180] };
-            // Arms: at least 6 pixels long regardless of scale
-            let arm = 6_i32;
-            let gap = 1_i32;
+            // Arms: scale up for pixel mode so cursor is visible at full resolution
+            let arm = if render_mode == RenderMode::Pixel { 12_i32 } else { 6_i32 };
+            let gap = if render_mode == RenderMode::Pixel { 2_i32 } else { 1_i32 };
             for d in gap..=arm {
                 pixel_gfx::blend_pixel(&mut img, cx - d, cy, cc);
                 pixel_gfx::blend_pixel(&mut img, cx + d, cy, cc);
@@ -435,14 +457,30 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
                 }
             }
             let text = "PUZZLE COMPLETE!";
-            let scale = (sx * 3.0).max(1.0) as u32;
+            let scale = if render_mode == RenderMode::Pixel { 3_u32 } else { (sx * 3.0).max(1.0) as u32 };
             let char_w = 6 * scale as i32;
             let tx = (pw as i32 / 2) - (text.len() as i32 * char_w / 2);
             let ty = ph as i32 / 2 - (4 * scale as i32);
             pixel_gfx::draw_text(&mut img, tx, ty, text, [80, 255, 80, 255], scale);
         }
 
-        braille::render_braille(&img, f.buffer_mut(), pf_inner);
+        match render_mode {
+            RenderMode::Text => {
+                if text_settings.halfblock {
+                    halfblock::render_halfblock(&img, f.buffer_mut(), pf_inner);
+                } else if text_settings.dual_color || text_settings.supersample {
+                    braille::render_braille_enhanced(
+                        &img, f.buffer_mut(), pf_inner,
+                        text_settings.dual_color, text_settings.supersample,
+                    );
+                } else {
+                    braille::render_braille(&img, f.buffer_mut(), pf_inner);
+                }
+            }
+            RenderMode::Pixel => {
+                pixel_img = Some(image::DynamicImage::ImageRgba8(img));
+            }
+        }
 
         // ── Parts Bin ──
         let mut bin_lines: Vec<Line> = Vec::new();
@@ -494,12 +532,34 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
             .block(Block::default().borders(Borders::TOP));
         f.render_widget(help, help_area);
     })?;
+
+    // Overlay pixel image via viuer after ratatui has drawn the chrome
+    if let Some(img) = pixel_img {
+        execute!(io::stdout(), cursor::MoveTo(pf_inner_rect.x, pf_inner_rect.y))?;
+        let conf = viuer::Config {
+            width: Some(pf_inner_rect.width as u32),
+            height: Some(pf_inner_rect.height as u32),
+            absolute_offset: false,
+            ..Default::default()
+        };
+        viuer::print(&img, &conf)?;
+    }
+
     Ok(())
 }
 
 // ── Main Loop ───────────────────────────────────────────────────
 
 fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let render_mode = if args.iter().any(|a| a == "--pixel") {
+        RenderMode::Pixel
+    } else if args.iter().any(|a| a == "--text") {
+        RenderMode::Text
+    } else {
+        detect_mode()
+    };
+
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
@@ -508,6 +568,7 @@ fn main() -> Result<()> {
 
     let (world, puzzle) = build_puzzle_1();
     let mut game = Game::new(world, puzzle);
+    let mut text_settings = TextSettings::default();
 
     let tick_duration = Duration::from_millis(1000 / TARGET_FPS as u64);
 
@@ -524,7 +585,7 @@ fn main() -> Result<()> {
             game.status_frames -= 1;
         }
 
-        render_frame(&mut terminal, &mut game)?;
+        render_frame(&mut terminal, &mut game, render_mode, text_settings)?;
 
         // Input
         let elapsed = frame_start.elapsed();
@@ -653,6 +714,20 @@ fn main() -> Result<()> {
                     // ── Delete ──
                     KeyCode::Char('d') | KeyCode::Delete if game.mode == Mode::Build => {
                         game.delete_selected();
+                    }
+
+                    // ── Graphics toggles (work in any mode) ──
+                    KeyCode::Char('1') => {
+                        text_settings.halfblock = !text_settings.halfblock;
+                        game.set_status(&format!("Renderer: {}", text_settings.label()));
+                    }
+                    KeyCode::Char('2') => {
+                        text_settings.dual_color = !text_settings.dual_color;
+                        game.set_status(&format!("Dual color: {}", if text_settings.dual_color { "ON" } else { "OFF" }));
+                    }
+                    KeyCode::Char('3') => {
+                        text_settings.supersample = !text_settings.supersample;
+                        game.set_status(&format!("Supersample: {}", if text_settings.supersample { "ON" } else { "OFF" }));
                     }
 
                     _ => {}

@@ -98,6 +98,132 @@ pub fn render_braille(img: &RgbaImage, buf: &mut Buffer, area: Rect) {
     }
 }
 
+/// Enhanced braille renderer with dual-color and supersample support.
+///
+/// - `dual_color`: set bg color per cell to the average of *unlit* pixels,
+///   giving a second color channel.
+/// - `supersample`: when true, expects image at 2× braille resolution
+///   (cols*4, rows*8). Each braille dot averages a 2×2 block of source pixels
+///   for smoother edges.
+pub fn render_braille_enhanced(
+    img: &RgbaImage,
+    buf: &mut Buffer,
+    area: Rect,
+    dual_color: bool,
+    supersample: bool,
+) {
+    let img_w = img.width() as usize;
+    let img_h = img.height() as usize;
+
+    // When supersampling, each braille dot = 2×2 source pixels
+    let ss = if supersample { 2 } else { 1 };
+
+    let cols = (img_w / (2 * ss)).min(area.width as usize);
+    let rows = (img_h / (4 * ss)).min(area.height as usize);
+
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let mut dots: u8 = 0;
+            // Lit pixel accumulators
+            let mut lr_sum: u32 = 0;
+            let mut lg_sum: u32 = 0;
+            let mut lb_sum: u32 = 0;
+            let mut lit_count: u32 = 0;
+            // Unlit pixel accumulators (for dual-color bg)
+            let mut ur_sum: u32 = 0;
+            let mut ug_sum: u32 = 0;
+            let mut ub_sum: u32 = 0;
+            let mut unlit_count: u32 = 0;
+
+            for dy in 0..4_usize {
+                for dx in 0..2_usize {
+                    // Sample the source region for this dot
+                    let src_x = cx * 2 * ss + dx * ss;
+                    let src_y = cy * 4 * ss + dy * ss;
+
+                    let mut lum_acc: u32 = 0;
+                    let mut r_acc: u32 = 0;
+                    let mut g_acc: u32 = 0;
+                    let mut b_acc: u32 = 0;
+                    let mut samples: u32 = 0;
+
+                    for sy in 0..ss {
+                        for sx in 0..ss {
+                            let px = src_x + sx;
+                            let py = src_y + sy;
+                            if px < img_w && py < img_h {
+                                let Rgba([r, g, b, a]) = *img.get_pixel(px as u32, py as u32);
+                                let lum = ((r as u16 * 77 + g as u16 * 150 + b as u16 * 29) >> 8) as u8;
+                                let effective = ((lum as u16 * a as u16) >> 8) as u8;
+                                lum_acc += effective as u32;
+                                let af = a as u32;
+                                r_acc += r as u32 * af / 255;
+                                g_acc += g as u32 * af / 255;
+                                b_acc += b as u32 * af / 255;
+                                samples += 1;
+                            }
+                        }
+                    }
+
+                    if samples == 0 {
+                        continue;
+                    }
+
+                    let avg_lum = lum_acc / samples;
+                    let avg_r = r_acc / samples;
+                    let avg_g = g_acc / samples;
+                    let avg_b = b_acc / samples;
+
+                    if avg_lum > LUMINANCE_THRESHOLD as u32 {
+                        dots |= 1 << DOT_MAP[dy][dx];
+                        lr_sum += avg_r;
+                        lg_sum += avg_g;
+                        lb_sum += avg_b;
+                        lit_count += 1;
+                    } else {
+                        ur_sum += avg_r;
+                        ug_sum += avg_g;
+                        ub_sum += avg_b;
+                        unlit_count += 1;
+                    }
+                }
+            }
+
+            let ch = char::from_u32(0x2800 + dots as u32).unwrap_or(' ');
+            let fg = if lit_count > 0 {
+                Color::Rgb(
+                    (lr_sum / lit_count).min(255) as u8,
+                    (lg_sum / lit_count).min(255) as u8,
+                    (lb_sum / lit_count).min(255) as u8,
+                )
+            } else {
+                Color::Reset
+            };
+
+            let bg = if dual_color && unlit_count > 0 {
+                Color::Rgb(
+                    (ur_sum / unlit_count).min(255) as u8,
+                    (ug_sum / unlit_count).min(255) as u8,
+                    (ub_sum / unlit_count).min(255) as u8,
+                )
+            } else {
+                Color::Reset
+            };
+
+            let tx = area.x + cx as u16;
+            let ty = area.y + cy as u16;
+            if tx < area.right() && ty < area.bottom() {
+                let style = if dual_color {
+                    Style::default().fg(fg).bg(bg)
+                } else {
+                    Style::default().fg(fg)
+                };
+                buf[(tx, ty)].set_char(ch).set_style(style);
+            }
+        }
+    }
+}
+
 /// Create a pixel buffer sized for braille rendering into the given terminal area.
 /// Returns (image, pixel_width, pixel_height).
 pub fn braille_image_for_area(area: Rect) -> RgbaImage {
