@@ -1,0 +1,24 @@
+(
+    title: "Puzzle #7: The Great Escape",
+    goal: "Knock the tennis ball off the screen.",
+    parts: [
+        // Floor with center gap
+        (kind: "BrickWall", x: 0, y: 340, width: Some(200), height: Some(20)),
+        (kind: "BrickWall", x: 440, y: 340, width: Some(200), height: Some(20)),
+        // Tiny platform above the gap
+        (kind: "WoodenWall", x: 305, y: 300, width: Some(30), height: Some(12)),
+        // Tennis ball on the platform (target)
+        (kind: "TennisBall", x: 312, y: 290, label: Some("tennis")),
+        // Decorative floating pool balls
+        (kind: "PoolBall", x: 150, y: 120, props: {"surface_number": 7.0}),
+        (kind: "PoolBall", x: 480, y: 200, props: {"surface_number": 9.0}),
+    ],
+    win_conditions: [
+        ExitedWorld(label: "tennis", edge: "Any"),
+    ],
+    bin: [
+        (kind: "BowlingBall", quantity: 2),
+        (kind: "SuperBall", quantity: 1),
+        (kind: "Cannonball", quantity: 1),
+    ],
+)

@@ -1,0 +1,19 @@
+(
+    title: "Puzzle #5: Over the Wall",
+    goal: "Get the 9-ball off the screen.",
+    parts: [
+        (kind: "BrickWall", x: 0, y: 340, width: Some(640), height: Some(20)),
+        (kind: "BrickWall", x: 310, y: 100, width: Some(20), height: Some(240)),
+        (kind: "Basketball", x: 150, y: 312),
+        (kind: "PoolBall", x: 460, y: 200, label: Some("nineball"), props: {"surface_number": 9.0}),
+        (kind: "WoodenWall", x: 500, y: 250, width: Some(140), height: Some(12)),
+    ],
+    win_conditions: [
+        ExitedWorld(label: "nineball", edge: "Any"),
+    ],
+    bin: [
+        (kind: "BowlingBall", quantity: 1),
+        (kind: "SuperBall", quantity: 2),
+        (kind: "TennisBall", quantity: 1),
+    ],
+)

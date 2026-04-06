@@ -16,7 +16,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Terminal;
 
+use std::path::PathBuf;
+
 use tim2::constants::*;
+use tim2::level;
 use tim2::parts::*;
 use tim2::physics;
 use tim2::puzzle::*;
@@ -237,427 +240,39 @@ impl Game {
     }
 }
 
-// ── Puzzle #1 ────────────────────────────────────────────────────
+// ── Level Loading ────────────────────────────────────────────────
 
-fn build_puzzle_1() -> (World, Puzzle) {
-    use tim2::parts::balls::BallType;
-    use tim2::parts::walls::WallType;
-
-    let mut world = World::new();
-
-    let set_size = |w: &mut World, width: f32, height: f32| {
-        if let Some(inst) = w.instances.last_mut() {
-            inst.props.width = width;
-            inst.props.height = height;
+fn find_levels_dir() -> PathBuf {
+    // Try relative to the binary, then CWD, then hardcoded dev path
+    let candidates = [
+        PathBuf::from("levels"),
+        PathBuf::from("game/levels"),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("levels")))
+            .unwrap_or_default(),
+    ];
+    for c in &candidates {
+        if c.is_dir() {
+            return c.clone();
         }
-    };
-
-    // Floor
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 340.0);
-    set_size(&mut world, 640.0, 20.0);
-
-    // Brick columns flanking the 8-ball
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 430.0, 100.0);
-    set_size(&mut world, 16.0, 240.0);
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 520.0, 100.0);
-    set_size(&mut world, 16.0, 240.0);
-
-    // Decorative balls
-    world.spawn_locked(PartId::Ball(BallType::BowlingBall), 50.0, 180.0);
-    world.spawn_locked(PartId::Ball(BallType::Basketball), 100.0, 180.0);
-    world.spawn_locked(PartId::Ball(BallType::SoccerBall), 145.0, 180.0);
-    world.spawn_locked(PartId::Ball(BallType::Baseball), 185.0, 185.0);
-    world.spawn_locked(PartId::Ball(BallType::TennisBall), 215.0, 188.0);
-    world.spawn_locked(PartId::Ball(BallType::Pinball), 250.0, 185.0);
-    world.spawn_locked(PartId::Ball(BallType::Basketball), 285.0, 180.0);
-    world.spawn_locked(PartId::Ball(BallType::SoccerBall), 330.0, 180.0);
-
-    // 8-ball floating between columns (ZeroGravity)
-    let eightball_id = world.spawn_locked(PartId::Ball(BallType::PoolBall), 470.0, 140.0);
-    if let Some(inst) = world.get_mut(eightball_id) {
-        inst.props.values.insert("surface_number".to_string(), 8.0);
     }
-
-    let mut puzzle = Puzzle::new(
-        "Puzzle #1",
-        "Knock the eight ball off the screen.",
-    );
-
-    puzzle.win_conditions.push(WinCondition::ObjectExitedWorld {
-        instance_id: eightball_id,
-        edge: WorldEdge::Any,
-    });
-
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::SuperBall), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::Basketball), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::SoccerBall), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::TennisBall), quantity: 1 });
-
-    (world, puzzle)
+    PathBuf::from("levels")
 }
 
-// ── Puzzle #2 ────────────────────────────────────────────────────
-
-fn build_puzzle_2() -> (World, Puzzle) {
-    use tim2::parts::balls::BallType;
-    use tim2::parts::inclines::InclineType;
-    use tim2::parts::walls::WallType;
-
-    let mut world = World::new();
-
-    let set_size = |w: &mut World, width: f32, height: f32| {
-        if let Some(inst) = w.instances.last_mut() {
-            inst.props.width = width;
-            inst.props.height = height;
+fn load_all_levels() -> Vec<level::LevelDef> {
+    let dir = find_levels_dir();
+    match level::load_levels_from_dir(&dir) {
+        Ok(levels) if !levels.is_empty() => levels,
+        Ok(_) => {
+            eprintln!("No level files found in {}", dir.display());
+            std::process::exit(1);
         }
-    };
-
-    // Floor
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 340.0);
-    set_size(&mut world, 640.0, 20.0);
-
-    // Bowling ball at top-left
-    let bowling_id = world.spawn_locked(PartId::Ball(BallType::BowlingBall), 50.0, 20.0);
-
-    // Fixed shelves
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 200.0, 120.0);
-    set_size(&mut world, 120.0, 12.0);
-
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 350.0, 200.0);
-    set_size(&mut world, 120.0, 12.0);
-
-    // Goal zone pillars (YellowBrickWall)
-    world.spawn_locked(PartId::Wall(WallType::YellowBrickWall), 500.0, 280.0);
-    set_size(&mut world, 16.0, 60.0);
-
-    world.spawn_locked(PartId::Wall(WallType::YellowBrickWall), 600.0, 280.0);
-    set_size(&mut world, 16.0, 60.0);
-
-    let mut puzzle = Puzzle::new(
-        "Puzzle #2: The Cascade",
-        "Guide the bowling ball into the goal zone.",
-    );
-
-    puzzle.win_conditions.push(WinCondition::ObjectAtPosition {
-        instance_id: bowling_id,
-        region: (500.0, 300.0, 620.0, 350.0),
-    });
-
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Incline(InclineType::BrickIncline), quantity: 2 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Wall(WallType::WoodenWall), quantity: 2 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::TennisBall), quantity: 1 });
-
-    (world, puzzle)
-}
-
-// ── Puzzle #3 ────────────────────────────────────────────────────
-
-fn build_puzzle_3() -> (World, Puzzle) {
-    use tim2::parts::balls::BallType;
-    use tim2::parts::walls::WallType;
-
-    let mut world = World::new();
-
-    let set_size = |w: &mut World, width: f32, height: f32| {
-        if let Some(inst) = w.instances.last_mut() {
-            inst.props.width = width;
-            inst.props.height = height;
+        Err(e) => {
+            eprintln!("Failed to load levels from {}: {}", dir.display(), e);
+            std::process::exit(1);
         }
-    };
-
-    // Floor
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 340.0);
-    set_size(&mut world, 640.0, 20.0);
-
-    // Small platform under the pinball
-    world.spawn_locked(PartId::Wall(WallType::CinderBlockWall), 80.0, 310.0);
-    set_size(&mut world, 60.0, 12.0);
-
-    // Pinball sitting on the platform
-    let pinball_id = world.spawn_locked(PartId::Ball(BallType::Pinball), 100.0, 300.0);
-
-    // Mid-height ledge
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 200.0, 220.0);
-    set_size(&mut world, 80.0, 12.0);
-
-    // Channel on the right side — left wall
-    world.spawn_locked(PartId::Wall(WallType::CinderBlockWall), 450.0, 200.0);
-    set_size(&mut world, 12.0, 140.0);
-
-    // Channel top wall
-    world.spawn_locked(PartId::Wall(WallType::CinderBlockWall), 450.0, 200.0);
-    set_size(&mut world, 190.0, 12.0);
-
-    // Floating PoolBall (zero gravity) as obstacle/tool
-    world.spawn_locked(PartId::Ball(BallType::PoolBall), 300.0, 250.0);
-
-    let mut puzzle = Puzzle::new(
-        "Puzzle #3",
-        "Launch the pinball off the right edge.",
-    );
-
-    puzzle.win_conditions.push(WinCondition::ObjectExitedWorld {
-        instance_id: pinball_id,
-        edge: WorldEdge::Right,
-    });
-
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::SuperBall), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::Basketball), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::BowlingBall), quantity: 1 });
-
-    (world, puzzle)
-}
-
-// ── Puzzle #4 ────────────────────────────────────────────────────
-
-fn build_puzzle_4() -> (World, Puzzle) {
-    use tim2::parts::balls::BallType;
-    use tim2::parts::walls::WallType;
-
-    let mut world = World::new();
-
-    let set_size = |w: &mut World, width: f32, height: f32| {
-        if let Some(inst) = w.instances.last_mut() {
-            inst.props.width = width;
-            inst.props.height = height;
-        }
-    };
-
-    // Left wall
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 0.0);
-    set_size(&mut world, 16.0, 360.0);
-
-    // Right wall
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 624.0, 0.0);
-    set_size(&mut world, 16.0, 360.0);
-
-    // Top wall
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 0.0);
-    set_size(&mut world, 640.0, 16.0);
-
-    // Bottom-left wall (pocket edge)
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 344.0);
-    set_size(&mut world, 250.0, 16.0);
-
-    // Bottom-right wall (pocket edge)
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 390.0, 344.0);
-    set_size(&mut world, 250.0, 16.0);
-
-    // 3-ball (target) floating at center
-    let three_ball_id = world.spawn_locked(PartId::Ball(BallType::PoolBall), 320.0, 180.0);
-    if let Some(inst) = world.get_mut(three_ball_id) {
-        inst.props.values.insert("surface_number".to_string(), 3.0);
     }
-
-    // Cue ball floating left of center
-    let cue_ball_id = world.spawn_locked(PartId::Ball(BallType::PoolBall), 150.0, 180.0);
-    if let Some(inst) = world.get_mut(cue_ball_id) {
-        inst.props.values.insert("surface_number".to_string(), 0.0);
-    }
-
-    // Obstacle: 1-ball
-    let one_ball_id = world.spawn_locked(PartId::Ball(BallType::PoolBall), 400.0, 120.0);
-    if let Some(inst) = world.get_mut(one_ball_id) {
-        inst.props.values.insert("surface_number".to_string(), 1.0);
-    }
-
-    // Obstacle: 5-ball
-    let five_ball_id = world.spawn_locked(PartId::Ball(BallType::PoolBall), 450.0, 250.0);
-    if let Some(inst) = world.get_mut(five_ball_id) {
-        inst.props.values.insert("surface_number".to_string(), 5.0);
-    }
-
-    let mut puzzle = Puzzle::new(
-        "Puzzle #4: Pool Hall",
-        "Sink the 3-ball into the bottom pocket.",
-    );
-
-    puzzle.win_conditions.push(WinCondition::ObjectExitedWorld {
-        instance_id: three_ball_id,
-        edge: WorldEdge::Bottom,
-    });
-
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::BowlingBall), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::Baseball), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::TennisBall), quantity: 1 });
-
-    (world, puzzle)
-}
-
-fn build_puzzle_5() -> (World, Puzzle) {
-    use tim2::parts::balls::BallType;
-    use tim2::parts::walls::WallType;
-
-    let mut world = World::new();
-
-    let set_size = |w: &mut World, width: f32, height: f32| {
-        if let Some(inst) = w.instances.last_mut() {
-            inst.props.width = width;
-            inst.props.height = height;
-        }
-    };
-
-    // Floor
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 340.0);
-    set_size(&mut world, 640.0, 20.0);
-
-    // A tall column in the center divides the arena
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 310.0, 100.0);
-    set_size(&mut world, 20.0, 240.0);
-
-    // A basketball on the left side, at rest on the floor
-    world.spawn_locked(PartId::Ball(BallType::Basketball), 150.0, 312.0);
-
-    // Target: a PoolBall (ZeroGravity) floating on the right side of the wall
-    let target = world.spawn_locked(PartId::Ball(BallType::PoolBall), 460.0, 200.0);
-    if let Some(inst) = world.get_mut(target) {
-        inst.props.values.insert("surface_number".to_string(), 9.0);
-    }
-
-    // A shelf on the right that partially blocks the right edge
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 500.0, 250.0);
-    set_size(&mut world, 140.0, 12.0);
-
-    let mut puzzle = Puzzle::new(
-        "Puzzle #5: Over the Wall",
-        "Get the 9-ball off the screen.",
-    );
-
-    puzzle.win_conditions.push(WinCondition::ObjectExitedWorld {
-        instance_id: target,
-        edge: WorldEdge::Any,
-    });
-
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::BowlingBall), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::SuperBall), quantity: 2 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::TennisBall), quantity: 1 });
-
-    (world, puzzle)
-}
-
-fn build_puzzle_6() -> (World, Puzzle) {
-    use tim2::parts::balls::BallType;
-    use tim2::parts::walls::WallType;
-
-    let mut world = World::new();
-
-    let set_size = |w: &mut World, width: f32, height: f32| {
-        if let Some(inst) = w.instances.last_mut() {
-            inst.props.width = width;
-            inst.props.height = height;
-        }
-    };
-
-    // Left wall
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 0.0);
-    set_size(&mut world, 16.0, 360.0);
-
-    // Right wall
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 624.0, 0.0);
-    set_size(&mut world, 16.0, 360.0);
-
-    // Top wall
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 0.0);
-    set_size(&mut world, 640.0, 16.0);
-
-    // Bottom-left wall (basket edge)
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 344.0);
-    set_size(&mut world, 200.0, 16.0);
-
-    // Bottom-right wall (basket edge)
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 440.0, 344.0);
-    set_size(&mut world, 200.0, 16.0);
-
-    // Internal deflectors (wooden wall bumpers)
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 150.0, 120.0);
-    set_size(&mut world, 100.0, 12.0);
-
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 400.0, 120.0);
-    set_size(&mut world, 100.0, 12.0);
-
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 280.0, 200.0);
-    set_size(&mut world, 80.0, 12.0);
-
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 100.0, 280.0);
-    set_size(&mut world, 120.0, 12.0);
-
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 420.0, 280.0);
-    set_size(&mut world, 120.0, 12.0);
-
-    // SuperBall locked at top center (target ball)
-    let super_ball_id = world.spawn_locked(PartId::Ball(BallType::SuperBall), 310.0, 30.0);
-
-    // PoolBall obstacle floating at center
-    let _pool_obstacle_id = world.spawn_locked(PartId::Ball(BallType::PoolBall), 320.0, 160.0);
-
-    let mut puzzle = Puzzle::new(
-        "Puzzle #6: Bounce House",
-        "Bounce the super ball into the basket.",
-    );
-
-    puzzle.win_conditions.push(WinCondition::ObjectExitedWorld {
-        instance_id: super_ball_id,
-        edge: WorldEdge::Bottom,
-    });
-
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::BowlingBall), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::Basketball), quantity: 2 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::TennisBall), quantity: 1 });
-
-    (world, puzzle)
-}
-
-fn build_puzzle_7() -> (World, Puzzle) {
-    use tim2::parts::balls::BallType;
-    use tim2::parts::walls::WallType;
-
-    let mut world = World::new();
-
-    let set_size = |w: &mut World, width: f32, height: f32| {
-        if let Some(inst) = w.instances.last_mut() {
-            inst.props.width = width;
-            inst.props.height = height;
-        }
-    };
-
-    // Floor with gap in center — balls can fall through
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 0.0, 340.0);
-    set_size(&mut world, 200.0, 20.0);
-    world.spawn_locked(PartId::Wall(WallType::BrickWall), 440.0, 340.0);
-    set_size(&mut world, 200.0, 20.0);
-
-    // Tiny platform holding the tennis ball above the gap
-    world.spawn_locked(PartId::Wall(WallType::WoodenWall), 305.0, 300.0);
-    set_size(&mut world, 30.0, 12.0);
-
-    // Tennis ball on the tiny platform
-    let tennis_ball_id = world.spawn_locked(PartId::Ball(BallType::TennisBall), 312.0, 290.0);
-
-    // Decorative PoolBalls floating in the arena
-    let pool_7 = world.spawn_locked(PartId::Ball(BallType::PoolBall), 150.0, 120.0);
-    if let Some(inst) = world.get_mut(pool_7) {
-        inst.props.values.insert("surface_number".to_string(), 7.0);
-    }
-    let pool_9 = world.spawn_locked(PartId::Ball(BallType::PoolBall), 480.0, 200.0);
-    if let Some(inst) = world.get_mut(pool_9) {
-        inst.props.values.insert("surface_number".to_string(), 9.0);
-    }
-
-    let mut puzzle = Puzzle::new(
-        "Puzzle #7: The Great Escape",
-        "Knock the tennis ball off the screen.",
-    );
-
-    puzzle.win_conditions.push(WinCondition::ObjectExitedWorld {
-        instance_id: tennis_ball_id,
-        edge: WorldEdge::Any,
-    });
-
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::BowlingBall), quantity: 2 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::SuperBall), quantity: 1 });
-    puzzle.bin_parts.push(BinPart { part_id: PartId::Ball(BallType::Cannonball), quantity: 1 });
-
-    (world, puzzle)
 }
 
 // ── Rendering ───────────────────────────────────────────────────
@@ -917,22 +532,6 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
     Ok(())
 }
 
-// ── Level Registry ───────────────────────────────────────────────
-
-type PuzzleBuilder = fn() -> (World, Puzzle);
-
-fn all_puzzles() -> Vec<PuzzleBuilder> {
-    vec![
-        build_puzzle_1,
-        build_puzzle_2,
-        build_puzzle_3,
-        build_puzzle_4,
-        build_puzzle_5,
-        build_puzzle_6,
-        build_puzzle_7,
-    ]
-}
-
 // ── Main Loop ───────────────────────────────────────────────────
 
 fn main() -> Result<()> {
@@ -951,11 +550,11 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let puzzles = all_puzzles();
-    let num_levels = puzzles.len();
+    let level_defs = load_all_levels();
+    let num_levels = level_defs.len();
     let mut current_level: usize = 0;
 
-    let (world, puzzle) = (puzzles[current_level])();
+    let (world, puzzle) = level::build_from_def(&level_defs[current_level])?;
     let mut game = Game::new(world, puzzle);
     let mut text_settings = TextSettings::default();
 
@@ -988,7 +587,7 @@ fn main() -> Result<()> {
                     KeyCode::Char('n') if game.mode != Mode::Running => {
                         if current_level + 1 < num_levels {
                             current_level += 1;
-                            let (world, puzzle) = (puzzles[current_level])();
+                            let (world, puzzle) = level::build_from_def(&level_defs[current_level]).unwrap();
                             game = Game::new(world, puzzle);
                             game.set_status(&format!("Level {}/{}", current_level + 1, num_levels));
                         } else {
@@ -998,7 +597,7 @@ fn main() -> Result<()> {
                     KeyCode::Char('p') if game.mode != Mode::Running => {
                         if current_level > 0 {
                             current_level -= 1;
-                            let (world, puzzle) = (puzzles[current_level])();
+                            let (world, puzzle) = level::build_from_def(&level_defs[current_level]).unwrap();
                             game = Game::new(world, puzzle);
                             game.set_status(&format!("Level {}/{}", current_level + 1, num_levels));
                         } else {

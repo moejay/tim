@@ -1,0 +1,28 @@
+(
+    title: "Puzzle #4: Pool Hall",
+    goal: "Sink the 3-ball into the bottom pocket.",
+    parts: [
+        // Walls
+        (kind: "BrickWall", x: 0, y: 0, width: Some(16), height: Some(360)),
+        (kind: "BrickWall", x: 624, y: 0, width: Some(16), height: Some(360)),
+        (kind: "BrickWall", x: 0, y: 0, width: Some(640), height: Some(16)),
+        // Bottom walls with pocket gap (x=250 to x=390)
+        (kind: "BrickWall", x: 0, y: 344, width: Some(250), height: Some(16)),
+        (kind: "BrickWall", x: 390, y: 344, width: Some(250), height: Some(16)),
+        // 3-ball (target)
+        (kind: "PoolBall", x: 320, y: 180, label: Some("three"), props: {"surface_number": 3.0}),
+        // Cue ball
+        (kind: "PoolBall", x: 150, y: 180, props: {"surface_number": 0.0}),
+        // Obstacle balls
+        (kind: "PoolBall", x: 400, y: 120, props: {"surface_number": 1.0}),
+        (kind: "PoolBall", x: 450, y: 250, props: {"surface_number": 5.0}),
+    ],
+    win_conditions: [
+        ExitedWorld(label: "three", edge: "Bottom"),
+    ],
+    bin: [
+        (kind: "BowlingBall", quantity: 1),
+        (kind: "Baseball", quantity: 1),
+        (kind: "TennisBall", quantity: 1),
+    ],
+)

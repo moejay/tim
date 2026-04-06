@@ -1,0 +1,31 @@
+(
+    title: "Puzzle #1",
+    goal: "Knock the eight ball off the screen.",
+    parts: [
+        // Floor
+        (kind: "BrickWall", x: 0, y: 340, width: Some(640), height: Some(20)),
+        // Brick columns flanking the 8-ball
+        (kind: "BrickWall", x: 430, y: 100, width: Some(16), height: Some(240)),
+        (kind: "BrickWall", x: 520, y: 100, width: Some(16), height: Some(240)),
+        // Decorative balls
+        (kind: "BowlingBall", x: 50, y: 180),
+        (kind: "Basketball", x: 100, y: 180),
+        (kind: "SoccerBall", x: 145, y: 180),
+        (kind: "Baseball", x: 185, y: 185),
+        (kind: "TennisBall", x: 215, y: 188),
+        (kind: "Pinball", x: 250, y: 185),
+        (kind: "Basketball", x: 285, y: 180),
+        (kind: "SoccerBall", x: 330, y: 180),
+        // 8-ball floating between columns
+        (kind: "PoolBall", x: 470, y: 140, label: Some("eightball"), props: {"surface_number": 8.0}),
+    ],
+    win_conditions: [
+        ExitedWorld(label: "eightball", edge: "Any"),
+    ],
+    bin: [
+        (kind: "SuperBall", quantity: 1),
+        (kind: "Basketball", quantity: 1),
+        (kind: "SoccerBall", quantity: 1),
+        (kind: "TennisBall", quantity: 1),
+    ],
+)

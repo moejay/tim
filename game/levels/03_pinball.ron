@@ -1,0 +1,21 @@
+(
+    title: "Puzzle #3",
+    goal: "Launch the pinball off the right edge.",
+    parts: [
+        (kind: "BrickWall", x: 0, y: 340, width: Some(640), height: Some(20)),
+        (kind: "CinderBlockWall", x: 80, y: 310, width: Some(60), height: Some(12)),
+        (kind: "Pinball", x: 100, y: 300, label: Some("pinball")),
+        (kind: "BrickWall", x: 200, y: 220, width: Some(80), height: Some(12)),
+        (kind: "CinderBlockWall", x: 450, y: 200, width: Some(12), height: Some(140)),
+        (kind: "CinderBlockWall", x: 450, y: 200, width: Some(190), height: Some(12)),
+        (kind: "PoolBall", x: 300, y: 250),
+    ],
+    win_conditions: [
+        ExitedWorld(label: "pinball", edge: "Right"),
+    ],
+    bin: [
+        (kind: "SuperBall", quantity: 1),
+        (kind: "Basketball", quantity: 1),
+        (kind: "BowlingBall", quantity: 1),
+    ],
+)

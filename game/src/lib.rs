@@ -1,4 +1,5 @@
 pub mod constants;
+pub mod level;
 pub mod parts;
 pub mod physics;
 pub mod puzzle;

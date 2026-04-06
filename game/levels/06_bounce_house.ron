@@ -1,0 +1,31 @@
+(
+    title: "Puzzle #6: Bounce House",
+    goal: "Bounce the super ball into the basket.",
+    parts: [
+        // Enclosure walls
+        (kind: "BrickWall", x: 0, y: 0, width: Some(16), height: Some(360)),
+        (kind: "BrickWall", x: 624, y: 0, width: Some(16), height: Some(360)),
+        (kind: "BrickWall", x: 0, y: 0, width: Some(640), height: Some(16)),
+        // Bottom walls with basket gap (x=200 to x=440)
+        (kind: "BrickWall", x: 0, y: 344, width: Some(200), height: Some(16)),
+        (kind: "BrickWall", x: 440, y: 344, width: Some(200), height: Some(16)),
+        // Internal deflectors
+        (kind: "WoodenWall", x: 150, y: 120, width: Some(100), height: Some(12)),
+        (kind: "WoodenWall", x: 400, y: 120, width: Some(100), height: Some(12)),
+        (kind: "WoodenWall", x: 280, y: 200, width: Some(80), height: Some(12)),
+        (kind: "WoodenWall", x: 100, y: 280, width: Some(120), height: Some(12)),
+        (kind: "WoodenWall", x: 420, y: 280, width: Some(120), height: Some(12)),
+        // SuperBall (target)
+        (kind: "SuperBall", x: 310, y: 30, label: Some("superball")),
+        // PoolBall obstacle
+        (kind: "PoolBall", x: 320, y: 160),
+    ],
+    win_conditions: [
+        ExitedWorld(label: "superball", edge: "Bottom"),
+    ],
+    bin: [
+        (kind: "BowlingBall", quantity: 1),
+        (kind: "Basketball", quantity: 2),
+        (kind: "TennisBall", quantity: 1),
+    ],
+)
