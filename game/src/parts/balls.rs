@@ -182,7 +182,8 @@ impl PartDef for BallType {
     }
 
     fn draw_pixel(&self, img: &mut RgbaImage, x: f32, y: f32, props: &PartProps, frame: u64) {
-        let r = self.radius();
+        // Use props.width/2 as radius so scaling works correctly
+        let r = props.width / 2.0;
         let cx = x + r;
         let cy = y + r;
 

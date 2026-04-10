@@ -141,7 +141,7 @@ impl PartDef for ElectricalType {
     }
 
     fn draw_pixel(&self, img: &mut RgbaImage, x: f32, y: f32, props: &PartProps, frame: u64) {
-        let (w, h) = self.default_size();
+        let (w, h) = (props.width, props.height);
         let ix = x as i32;
         let iy = y as i32;
         let ic = self.icon_color();
@@ -243,17 +243,21 @@ impl PartDef for ElectricalType {
             }
             ElectricalType::SwitchOutlet => {
                 // State 0=Off, 1=On
+                // Flippable: determines which side the switch is on
                 fill_rect(img, ix, iy, w as i32, h as i32, [230, 225, 220, 255]);
                 draw_line(img, ix, iy, ix + w as i32, iy, [200, 200, 200, 255]);
-                fill_rect(img, ix + 4, iy + h as i32 / 2, 3, 4, [40, 40, 40, 255]);
-                fill_rect(img, ix + 9, iy + h as i32 / 2, 3, 4, [40, 40, 40, 255]);
-                // Toggle switch — position depends on state
-                fill_rect(img, ix + 5, iy + 4, 6, 10, [180, 180, 180, 255]);
+                let socket_x = if props.flipped { ix + w as i32 - 7 } else { ix + 4 };
+                fill_rect(img, socket_x, iy + h as i32 / 2, 3, 4, [40, 40, 40, 255]);
+                fill_rect(img, socket_x + 5, iy + h as i32 / 2, 3, 4, [40, 40, 40, 255]);
+                // Toggle switch — position depends on state and flip
+                let switch_x = if props.flipped { ix + w as i32 - 11 } else { ix + 5 };
+                fill_rect(img, switch_x, iy + 4, 6, 10, [180, 180, 180, 255]);
                 if props.current_state == 1 {
-                    fill_rect(img, ix + 6, iy + 9, 4, 5, [220, 220, 220, 255]); // switch down (on)
-                    blend_pixel(img, ix + 8, iy + 2, [100, 255, 100, 200]); // green LED
+                    fill_rect(img, switch_x + 1, iy + 9, 4, 5, [220, 220, 220, 255]); // switch down (on)
+                    let led_x = if props.flipped { ix + w as i32 - 8 } else { ix + 8 };
+                    blend_pixel(img, led_x, iy + 2, [100, 255, 100, 200]); // green LED
                 } else {
-                    fill_rect(img, ix + 6, iy + 4, 4, 5, [220, 220, 220, 255]); // switch up (off)
+                    fill_rect(img, switch_x + 1, iy + 4, 4, 5, [220, 220, 220, 255]); // switch up (off)
                 }
             }
             ElectricalType::SolarPanel => {
@@ -275,14 +279,21 @@ impl PartDef for ElectricalType {
             }
             ElectricalType::ElectricMotor => {
                 // State 0=Off, 1=On
+                // Flippable: clockwise vs counter-clockwise spin
                 fill_rect(img, ix, iy, w as i32, h as i32, [ic[0], ic[1], ic[2], 200]);
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 fill_circle(img, cx, cy, 8.0, [100, 100, 110, 255]);
                 if props.current_state == 1 {
-                    // Spinning axle
-                    let a = frame as f32 * 0.2;
+                    // Spinning axle — direction depends on flip
+                    let spin_dir = if props.flipped { -1.0_f32 } else { 1.0 };
+                    let a = frame as f32 * 0.2 * spin_dir;
                     draw_line(img, cx as i32, cy as i32, (cx + a.cos() * 7.0) as i32, (cy + a.sin() * 7.0) as i32, [60, 60, 70, 255]);
+                    // Direction arrow indicator
+                    let arrow_a = a + spin_dir * std::f32::consts::FRAC_PI_2;
+                    let ax = cx + arrow_a.cos() * 6.0;
+                    let ay = cy + arrow_a.sin() * 6.0;
+                    blend_pixel(img, ax as i32, ay as i32, [200, 200, 255, 180]);
                     // Vibration
                     let vib = ((frame as f32 * 0.5).sin() * 1.0) as i32;
                     fill_rect(img, ix + vib, iy, 2, h as i32, [120, 120, 130, 120]);

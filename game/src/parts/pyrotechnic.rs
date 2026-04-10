@@ -187,7 +187,7 @@ impl PartDef for PyrotechnicType {
     }
 
     fn draw_pixel(&self, img: &mut RgbaImage, x: f32, y: f32, props: &PartProps, frame: u64) {
-        let (w, _h) = self.default_size();
+        let (w, _h) = (props.width, props.height);
         let ix = x as i32;
         let iy = y as i32;
 
@@ -419,14 +419,22 @@ impl PartDef for PyrotechnicType {
                 }
             }
             PyrotechnicType::MagnifyingGlass => {
-                fill_circle(img, x + 8.0, y + 8.0, 7.0, [200, 220, 240, 120]);
+                // Flippable: handle direction and focus direction mirror
+                let lens_cx = if props.flipped { x + 8.0 } else { x + 8.0 };
+                fill_circle(img, lens_cx, y + 8.0, 7.0, [200, 220, 240, 120]);
                 let r = 7.0_f32;
                 for t in 0..36 {
                     let a = t as f32 * std::f32::consts::TAU / 36.0;
-                    blend_pixel(img, (x + 8.0 + a.cos() * r) as i32, (y + 8.0 + a.sin() * r) as i32, [140, 140, 150, 255]);
+                    blend_pixel(img, (lens_cx + a.cos() * r) as i32, (y + 8.0 + a.sin() * r) as i32, [140, 140, 150, 255]);
                 }
-                draw_line(img, ix + 12, iy + 14, ix + 14, iy + 22, [120, 80, 40, 255]);
-                draw_line(img, ix + 13, iy + 14, ix + 15, iy + 22, [120, 80, 40, 255]);
+                // Handle — flips side
+                let (hx1, hx2) = if props.flipped {
+                    (ix + 2, ix)
+                } else {
+                    (ix + 12, ix + 14)
+                };
+                draw_line(img, hx1, iy + 14, hx2, iy + 22, [120, 80, 40, 255]);
+                draw_line(img, hx1 + 1, iy + 14, hx2 + 1, iy + 22, [120, 80, 40, 255]);
             }
             PyrotechnicType::MatchOnSpring => {
                 for sy in 0..5 {

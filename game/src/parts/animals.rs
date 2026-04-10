@@ -170,41 +170,62 @@ impl PartDef for AnimalType {
         match self {
             AnimalType::PokeyCat => {
                 // State 0=Idle, 1=Walking, 2=Chasing, 3=Startled
+                // Flippable: initial facing direction (left or right)
+                let (w, _h) = (props.width, props.height);
                 let fur_color = if props.current_state == 3 {
                     [255, 200, 80, 255] // Brighter when startled
                 } else {
                     [230, 160, 60, 255]
                 };
-                fill_rect(img, ix + 4, iy + 8, 16, 10, fur_color);
-                fill_circle(img, x + 8.0, y + 6.0, 6.0, fur_color);
+                // Mirror helper: when flipped, mirror x offsets within bounding box
+                let mx = |offset: i32| -> i32 {
+                    if props.flipped { ix + w as i32 - 1 - offset } else { ix + offset }
+                };
+                let mxf = |offset: f32| -> f32 {
+                    if props.flipped { x + w - offset } else { x + offset }
+                };
+                // Body
+                fill_rect(img, mx(4).min(mx(19)), iy + 8, 16, 10, fur_color);
+                // Head (at the front)
+                fill_circle(img, mxf(8.0), y + 6.0, 6.0, fur_color);
                 // Ears — puffed up when startled
                 let ear_w = if props.current_state == 3 { 3.0 } else { 2.0 };
-                fill_triangle(img, (x + 4.0, y - if props.current_state == 3 { 2.0 } else { 0.0 }), (x + 4.0 - ear_w, y + 4.0), (x + 4.0 + ear_w, y + 4.0), fur_color);
-                fill_triangle(img, (x + 12.0, y - if props.current_state == 3 { 2.0 } else { 0.0 }), (x + 12.0 - ear_w, y + 4.0), (x + 12.0 + ear_w, y + 4.0), fur_color);
+                let ear_y_off = if props.current_state == 3 { 2.0 } else { 0.0 };
+                fill_triangle(img, (mxf(4.0), y - ear_y_off), (mxf(4.0) - ear_w, y + 4.0), (mxf(4.0) + ear_w, y + 4.0), fur_color);
+                fill_triangle(img, (mxf(12.0), y - ear_y_off), (mxf(12.0) - ear_w, y + 4.0), (mxf(12.0) + ear_w, y + 4.0), fur_color);
                 // Eyes — wide when startled or chasing
                 let eye_size = if props.current_state >= 2 { 2 } else { 1 };
                 for dx in 0..eye_size { for dy in 0..eye_size {
-                    blend_pixel(img, ix + 6 + dx, iy + 5 + dy, [30, 30, 30, 255]);
-                    blend_pixel(img, ix + 10 + dx, iy + 5 + dy, [30, 30, 30, 255]);
+                    blend_pixel(img, mx(6) + dx, iy + 5 + dy, [30, 30, 30, 255]);
+                    blend_pixel(img, mx(10) + dx, iy + 5 + dy, [30, 30, 30, 255]);
                 }}
-                // Tail — speed varies by state
+                // Tail — at the back
                 let tail_speed = match props.current_state { 2 => 0.25, 3 => 0.4, _ => 0.1 };
                 let tail_wave = ((frame as f32 * tail_speed).sin() * 3.0) as i32;
-                draw_line(img, ix + 20, iy + 10, ix + 22, iy + 6 + tail_wave, [210, 140, 40, 255]);
+                draw_line(img, mx(20), iy + 10, mx(22), iy + 6 + tail_wave, [210, 140, 40, 255]);
                 // Legs — animate when walking/chasing
                 let leg_speed = match props.current_state { 1 => 0.15, 2 => 0.3, _ => 0.0 };
                 let leg_anim = ((frame as f32 * leg_speed).sin() * 2.0) as i32;
-                draw_line(img, ix + 6, iy + 18, ix + 6 + leg_anim, iy + 20, [210, 140, 40, 255]);
-                draw_line(img, ix + 18, iy + 18, ix + 18 - leg_anim, iy + 20, [210, 140, 40, 255]);
+                let leg_dir = if props.flipped { -1 } else { 1 };
+                draw_line(img, mx(6), iy + 18, mx(6) + leg_anim * leg_dir, iy + 20, [210, 140, 40, 255]);
+                draw_line(img, mx(18), iy + 18, mx(18) - leg_anim * leg_dir, iy + 20, [210, 140, 40, 255]);
                 // Startled stars
                 if props.current_state == 3 && frame % 6 < 3 {
-                    blend_pixel(img, ix - 2, iy - 2, [255, 255, 100, 255]);
-                    blend_pixel(img, ix + 16, iy - 3, [255, 255, 100, 255]);
-                    blend_pixel(img, ix + 20, iy + 2, [255, 255, 100, 255]);
+                    blend_pixel(img, mx(-2), iy - 2, [255, 255, 100, 255]);
+                    blend_pixel(img, mx(16), iy - 3, [255, 255, 100, 255]);
+                    blend_pixel(img, mx(20), iy + 2, [255, 255, 100, 255]);
                 }
             }
             AnimalType::MortMouse => {
                 // State 0=Idle, 1=Fleeing, 2=SeekingCheese, 3=Eaten, 4=Safe
+                // Flippable: initial facing direction
+                let (mw, _mh) = (props.width, props.height);
+                let mx = |offset: f32| -> f32 {
+                    if props.flipped { x + mw - offset } else { x + offset }
+                };
+                let mxi = |offset: i32| -> i32 {
+                    if props.flipped { ix + mw as i32 - 1 - offset } else { ix + offset }
+                };
                 match props.current_state {
                     3 => {
                         // Eaten — just a poof
@@ -219,16 +240,21 @@ impl PartDef for AnimalType {
                     }
                     _ => {
                         let leg_speed = match props.current_state { 1 => 0.35, 2 => 0.2, _ => 0.0 };
-                        fill_circle(img, x + 5.0, y + 5.0, 4.0, [160, 160, 160, 255]);
-                        fill_circle(img, x + 2.0, y + 2.0, 2.0, [180, 150, 150, 255]);
-                        blend_pixel(img, ix + 3, iy + 4, [30, 30, 30, 255]);
+                        // Body
+                        fill_circle(img, mx(5.0), y + 5.0, 4.0, [160, 160, 160, 255]);
+                        // Ear (at front/nose end)
+                        fill_circle(img, mx(2.0), y + 2.0, 2.0, [180, 150, 150, 255]);
+                        // Eye
+                        blend_pixel(img, mxi(3), iy + 4, [30, 30, 30, 255]);
+                        // Tail (at back)
                         let tail_wave = ((frame as f32 * (0.2 + leg_speed)).sin() * 2.0) as i32;
-                        draw_line(img, ix + 8, iy + 5, ix + 10, iy + 3 + tail_wave, [140, 140, 140, 255]);
+                        draw_line(img, mxi(8), iy + 5, mxi(10), iy + 3 + tail_wave, [140, 140, 140, 255]);
                         // Legs animated when fleeing/seeking
                         if leg_speed > 0.0 {
                             let leg = ((frame as f32 * leg_speed).sin() * 2.0) as i32;
-                            blend_pixel(img, ix + 3 + leg, iy + 8, [140, 140, 140, 255]);
-                            blend_pixel(img, ix + 7 - leg, iy + 8, [140, 140, 140, 255]);
+                            let leg_dir = if props.flipped { -1 } else { 1 };
+                            blend_pixel(img, mxi(3) + leg * leg_dir, iy + 8, [140, 140, 140, 255]);
+                            blend_pixel(img, mxi(7) - leg * leg_dir, iy + 8, [140, 140, 140, 255]);
                         }
                     }
                 }
@@ -240,62 +266,81 @@ impl PartDef for AnimalType {
             }
             AnimalType::EdisonAlligator => {
                 // State 0=Idle (tail bouncing), 1=Snapping, 2=Laughing
+                // Flippable: jaw faces left (default) or right
+                let (aw, _ah) = (props.width, props.height);
+                let mx = |offset: i32| -> i32 {
+                    if props.flipped { ix + aw as i32 - 1 - offset } else { ix + offset }
+                };
+                let mxf = |offset: f32| -> f32 {
+                    if props.flipped { x + aw - offset } else { x + offset }
+                };
                 // Body
-                fill_rect(img, ix + 8, iy + 12, 48, 14, [50, 160, 50, 255]);
+                let body_x = mx(8).min(mx(55));
+                fill_rect(img, body_x, iy + 12, 48, 14, [50, 160, 50, 255]);
                 // Head — jaw gap depends on state
                 let jaw_open = match props.current_state {
                     1 => 6, // snapping — wide open then closing
                     _ => 2,
                 };
-                fill_rect(img, ix, iy + 10, 12, 8, [60, 180, 60, 255]);
-                fill_rect(img, ix, iy + 18 + jaw_open, 12, 4, [50, 150, 50, 255]);
+                let head_x = mx(0).min(mx(11));
+                fill_rect(img, head_x, iy + 10, 12, 8, [60, 180, 60, 255]);
+                fill_rect(img, head_x, iy + 18 + jaw_open, 12, 4, [50, 150, 50, 255]);
                 // Teeth
                 for t in (0..12).step_by(3) {
-                    blend_pixel(img, ix + t, iy + 17, [255, 255, 255, 255]);
-                    blend_pixel(img, ix + t, iy + 18 + jaw_open, [255, 255, 255, 255]);
+                    blend_pixel(img, head_x + t, iy + 17, [255, 255, 255, 255]);
+                    blend_pixel(img, head_x + t, iy + 18 + jaw_open, [255, 255, 255, 255]);
                 }
                 // Eye
-                fill_circle(img, x + 8.0, y + 10.0, 2.0, [255, 255, 50, 255]);
-                blend_pixel(img, ix + 8, iy + 10, [30, 30, 30, 255]);
-                // Tail — always bouncing
+                fill_circle(img, mxf(8.0), y + 10.0, 2.0, [255, 255, 50, 255]);
+                blend_pixel(img, mx(8), iy + 10, [30, 30, 30, 255]);
+                // Tail — always bouncing (at back end)
                 let tail_y = ((frame as f32 * 0.12).sin() * 4.0) as i32;
-                draw_line(img, ix + 56, iy + 16, ix + 64, iy + 12 + tail_y, [40, 140, 40, 255]);
+                draw_line(img, mx(56), iy + 16, mx(64), iy + 12 + tail_y, [40, 140, 40, 255]);
                 // Legs
                 for lx in [16, 28, 40, 50] {
-                    draw_line(img, ix + lx, iy + 26, ix + lx, iy + 30, [40, 130, 40, 255]);
+                    draw_line(img, mx(lx), iy + 26, mx(lx), iy + 30, [40, 130, 40, 255]);
                 }
                 // Scales
                 for sx in (12..52).step_by(6) {
-                    blend_pixel(img, ix + sx, iy + 12, [40, 140, 40, 255]);
+                    blend_pixel(img, mx(sx), iy + 12, [40, 140, 40, 255]);
                 }
                 // Laughing — belly shaking, open mouth
                 if props.current_state == 2 {
                     let shake = ((frame as f32 * 0.4).sin() * 2.0) as i32;
-                    fill_rect(img, ix + 20 + shake, iy + 14, 20, 2, [70, 200, 70, 200]);
-                    // Ha ha text bubbles
+                    let belly_x = mx(20).min(mx(39));
+                    fill_rect(img, belly_x + shake, iy + 14, 20, 2, [70, 200, 70, 200]);
+                    // Ha ha text bubbles (near head)
                     if frame % 10 < 5 {
-                        blend_pixel(img, ix - 4, iy + 6, [255, 255, 255, 200]);
-                        blend_pixel(img, ix - 2, iy + 4, [255, 255, 255, 200]);
+                        blend_pixel(img, mx(-4), iy + 6, [255, 255, 255, 200]);
+                        blend_pixel(img, mx(-2), iy + 4, [255, 255, 255, 200]);
                     }
                 }
             }
             AnimalType::MelSchlemming => {
                 // State 0=Walking, 1=Running, 2=Stationary, 3=EnteringHouse, 4=Dead
+                // Flippable: initial walking direction
+                let (mw, _mh) = (props.width, props.height);
+                let mx = |offset: f32| -> f32 {
+                    if props.flipped { x + mw - offset } else { x + offset }
+                };
+                let mxi = |offset: i32| -> i32 {
+                    if props.flipped { ix + mw as i32 - 1 - offset } else { ix + offset }
+                };
                 match props.current_state {
                     4 => {
-                        // Dead — fallen figure
+                        // Dead — fallen figure (no direction)
                         fill_circle(img, x + 8.0, y + 20.0, 4.0, [180, 150, 120, 200]);
                         fill_rect(img, ix + 2, iy + 16, 12, 4, [50, 80, 160, 200]);
-                        // X eyes
                         blend_pixel(img, ix + 6, iy + 19, [60, 30, 30, 255]);
                         blend_pixel(img, ix + 10, iy + 19, [60, 30, 30, 255]);
                     }
                     3 => {
-                        // Entering house — partially visible, walking into door
+                        // Entering house — partially visible
                         let visible = (8 - (frame as i32 % 8)).max(0) as i32;
                         if visible > 0 {
-                            fill_circle(img, x + 8.0, y + 5.0, 4.0, [220, 180, 150, (visible * 30) as u8]);
-                            fill_rect(img, ix + 4, iy + 9, visible.min(8), 10, [60, 100, 200, (visible * 30) as u8]);
+                            fill_circle(img, mx(8.0), y + 5.0, 4.0, [220, 180, 150, (visible * 30) as u8]);
+                            let body_x = mxi(4).min(mxi(11));
+                            fill_rect(img, body_x, iy + 9, visible.min(8), 10, [60, 100, 200, (visible * 30) as u8]);
                         }
                     }
                     _ => {
@@ -304,13 +349,19 @@ impl PartDef for AnimalType {
                             1 => 2.0,     // running
                             _ => 0.0,     // stationary
                         };
-                        fill_circle(img, x + 8.0, y + 5.0, 4.0, [220, 180, 150, 255]);
-                        fill_rect(img, ix + 4, iy + 9, 8, 10, [60, 100, 200, 255]);
+                        // Head
+                        fill_circle(img, mx(8.0), y + 5.0, 4.0, [220, 180, 150, 255]);
+                        // Body
+                        let body_x = mxi(4).min(mxi(11));
+                        fill_rect(img, body_x, iy + 9, 8, 10, [60, 100, 200, 255]);
+                        // Legs
                         let step = if speed > 0.0 { ((frame as f32 * speed * 0.1).sin() * 3.0) as i32 } else { 0 };
-                        draw_line(img, ix + 6, iy + 19, ix + 4 + step, iy + 24, [60, 60, 80, 255]);
-                        draw_line(img, ix + 10, iy + 19, ix + 12 - step, iy + 24, [60, 60, 80, 255]);
-                        draw_line(img, ix + 4, iy + 11, ix + 2, iy + 16, [220, 180, 150, 255]);
-                        draw_line(img, ix + 12, iy + 11, ix + 14, iy + 16, [220, 180, 150, 255]);
+                        let leg_dir = if props.flipped { -1 } else { 1 };
+                        draw_line(img, mxi(6), iy + 19, mxi(4) + step * leg_dir, iy + 24, [60, 60, 80, 255]);
+                        draw_line(img, mxi(10), iy + 19, mxi(12) - step * leg_dir, iy + 24, [60, 60, 80, 255]);
+                        // Arms
+                        draw_line(img, mxi(4), iy + 11, mxi(2), iy + 16, [220, 180, 150, 255]);
+                        draw_line(img, mxi(12), iy + 11, mxi(14), iy + 16, [220, 180, 150, 255]);
                     }
                 }
             }
@@ -435,6 +486,6 @@ impl PartDef for AnimalType {
     }
 
     fn is_flippable(&self) -> bool {
-        matches!(self, AnimalType::EdisonAlligator)
+        matches!(self, AnimalType::EdisonAlligator | AnimalType::PokeyCat | AnimalType::MortMouse | AnimalType::MelSchlemming)
     }
 }

@@ -24,6 +24,7 @@ Feature specifications for The Incredible Machine 2 rebuild. Each spec is implem
 | 16 | Audio | [16-audio/v1.md](16-audio/v1.md) | Sound effects, background music, sound engine |
 | 17 | Rendering | [17-rendering/v1.md](17-rendering/v1.md) | Dual renderer (pixel + text), sprites, text characters, camera |
 | 18 | Scoring & Progression | [18-scoring-and-progression/v1.md](18-scoring-and-progression/v1.md) | Player profiles, tier progression, passwords, H2H scoring |
+| 19 | Game Flow | [19-game-flow/v1.md](19-game-flow/v1.md) | Complete screen flow, menus, dialogs, sign-in, workshop workflow, H2H rules |
 
 ## Dependency Graph
 
@@ -49,7 +50,8 @@ Feature specifications for The Incredible Machine 2 rebuild. Each spec is implem
                                      │
 14-UI ───────────────────────────────┤
 16-Audio ────────────────────────────┤
-17-Rendering ────────────────────────┘
+17-Rendering ────────────────────────┤
+19-Game-Flow (sign-in → menus → play)┘
 ```
 
 ## Versioning

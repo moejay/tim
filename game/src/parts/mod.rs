@@ -242,7 +242,7 @@ pub fn catalog() -> Vec<Category> {
                 PartId::Mechanical(Scissors), PartId::Mechanical(HedgeTrimmers),
                 PartId::Mechanical(TinSnips), PartId::Mechanical(BoxingGlove),
                 PartId::Mechanical(VacuumCleaner), PartId::Mechanical(PinballBumper),
-                PartId::Mechanical(Tack),
+                PartId::Mechanical(Tack), PartId::Mechanical(Bellows),
             ],
         },
         Category {
@@ -282,6 +282,9 @@ pub fn catalog() -> Vec<Category> {
                 PartId::Gadget(BoatCleat), PartId::Gadget(Gun), PartId::Gadget(AntiGravityPad),
                 PartId::Gadget(SantaLamp), PartId::Gadget(LaundryBasket), PartId::Gadget(Bucket),
                 PartId::Gadget(LeakyBucket), PartId::Gadget(Balloon), PartId::Gadget(HotAirBalloon),
+                PartId::Gadget(GlassBox), PartId::Gadget(WoodenBox), PartId::Gadget(WickerBox),
+                PartId::Gadget(MetalBox), PartId::Gadget(CardboardBox), PartId::Gadget(ColorBlock),
+                PartId::Gadget(MessageComputer), PartId::Gadget(Teapot),
             ],
         },
         Category {

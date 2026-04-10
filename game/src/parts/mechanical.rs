@@ -29,6 +29,7 @@ pub enum MechanicalType {
     VacuumCleaner,
     PinballBumper,
     Tack,
+    Bellows,
 }
 
 impl PartDef for MechanicalType {
@@ -54,6 +55,7 @@ impl PartDef for MechanicalType {
             MechanicalType::VacuumCleaner => "Vacuum Cleaner",
             MechanicalType::PinballBumper => "Pinball Bumper",
             MechanicalType::Tack => "Tack",
+            MechanicalType::Bellows => "Bike Pump (Bellows)",
         }
     }
 
@@ -79,6 +81,7 @@ impl PartDef for MechanicalType {
             MechanicalType::VacuumCleaner => "Requires power; sucks objects in ~60px radius",
             MechanicalType::PinballBumper => "Bounces objects away at ~800 px/s",
             MechanicalType::Tack => "Pops balloons on contact; forms walking surfaces",
+            MechanicalType::Bellows => "Air burst when compressed; blows objects/spins windmills; flippable",
         }
     }
 
@@ -106,6 +109,7 @@ impl PartDef for MechanicalType {
             MechanicalType::VacuumCleaner => (40.0, 32.0),
             MechanicalType::PinballBumper => (24.0, 24.0),
             MechanicalType::Tack => (8.0, 8.0),
+            MechanicalType::Bellows => (32.0, 24.0),
         }
     }
 
@@ -128,6 +132,7 @@ impl PartDef for MechanicalType {
             MechanicalType::VacuumCleaner => 'V',
             MechanicalType::PinballBumper => '\u{25C9}',
             MechanicalType::Tack => '\u{25B4}',
+            MechanicalType::Bellows => '\u{25C4}',
         }
     }
 
@@ -143,6 +148,7 @@ impl PartDef for MechanicalType {
             MechanicalType::BoxingGlove => RED,
             MechanicalType::VacuumCleaner => BLUE,
             MechanicalType::PinballBumper => YELLOW,
+            MechanicalType::Bellows => BROWN,
         }
     }
 
@@ -208,6 +214,11 @@ impl PartDef for MechanicalType {
                 StateDef { name: "Idle", description: "Not belt-driven" },
                 StateDef { name: "Running", description: "Belt-driven, moving objects" },
             ],
+            MechanicalType::Bellows => vec![
+                StateDef { name: "Open", description: "Handle up — ready to compress" },
+                StateDef { name: "Compressed", description: "Handle pushed down — emitting air burst" },
+                StateDef { name: "Spent", description: "Fully compressed — no more air" },
+            ],
             MechanicalType::Trampoline => vec![
                 StateDef { name: "Idle", description: "Surface at rest" },
                 StateDef { name: "Compressed", description: "Object landing — storing energy" },
@@ -220,7 +231,7 @@ impl PartDef for MechanicalType {
     }
 
     fn draw_pixel(&self, img: &mut RgbaImage, x: f32, y: f32, props: &PartProps, frame: u64) {
-        let (w, h) = self.default_size();
+        let (w, h) = (props.width, props.height);
         let ix = x as i32;
         let iy = y as i32;
         let ic = self.icon_color();
@@ -291,7 +302,8 @@ impl PartDef for MechanicalType {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 let blade_len = w / 2.0 - 4.0;
-                let angle = if props.current_state == 1 { frame as f32 * 0.08 } else { 0.4 }; // static angle when idle
+                let spin_dir = if props.flipped { -1.0_f32 } else { 1.0 };
+                let angle = if props.current_state == 1 { frame as f32 * 0.08 * spin_dir } else { 0.4 }; // static angle when idle
                 for i in 0..4 {
                     let a = angle + i as f32 * std::f32::consts::FRAC_PI_2;
                     let ex = cx + a.cos() * blade_len;
@@ -364,27 +376,33 @@ impl PartDef for MechanicalType {
             }
             MechanicalType::BoxingGlove => {
                 // State 0=Retracted, 1=Punching
+                // Punches horizontally in facing direction (flippable)
+                let dir: i32 = if props.flipped { -1 } else { 1 };
                 let punch_extend = if props.current_state == 1 { 12.0 } else { 0.0 };
-                let glove_y = y + 8.0 - punch_extend;
-                let arm_x = x + w / 2.0;
-                let arm_top = (glove_y + 10.0) as i32;
-                let arm_bot = iy + (h as i32);
-                // Spring arm
+                let base_x = if props.flipped { x + w - 8.0 } else { x };
+                let glove_x = base_x + dir as f32 * punch_extend;
+                let arm_cy = y + h / 2.0;
+                // Spring arm — horizontal coils
                 let coils = if props.current_state == 1 { 3 } else { 6 };
+                let arm_start = base_x + dir as f32 * 10.0;
+                let arm_end = if props.flipped { x + w } else { x + 8.0 };
                 for sy in 0..coils {
                     let t = sy as f32 / coils as f32;
-                    let arm_y = arm_top + ((arm_bot - arm_top) as f32 * t) as i32;
+                    let arm_px = arm_start as i32 + ((arm_end - arm_start) * t) as i32;
                     let wobble = (sy as f32 * 1.5).sin() * 3.0;
-                    blend_pixel(img, (arm_x + wobble) as i32, arm_y, [160, 160, 170, 255]);
-                    blend_pixel(img, (arm_x + wobble) as i32 + 1, arm_y, [160, 160, 170, 255]);
+                    blend_pixel(img, arm_px, (arm_cy + wobble) as i32, [160, 160, 170, 255]);
+                    blend_pixel(img, arm_px, (arm_cy + wobble) as i32 + 1, [160, 160, 170, 255]);
                 }
                 // Glove
-                fill_circle_gradient(img, arm_x, glove_y, 10.0, [230, 50, 50], [180, 30, 30]);
+                fill_circle_gradient(img, glove_x + dir as f32 * 2.0, arm_cy, 10.0, [230, 50, 50], [180, 30, 30]);
+                // Mount box on opposite side
+                let mount_x = if props.flipped { ix + w as i32 - 8 } else { ix };
+                fill_rect(img, mount_x, iy + 4, 8, h as i32 - 8, [100, 100, 110, 255]);
                 if props.current_state == 1 {
                     // Motion blur / impact lines
                     for i in 1..4 {
-                        let ly = glove_y + i as f32 * 5.0;
-                        draw_line(img, (arm_x - 6.0) as i32, ly as i32, (arm_x + 6.0) as i32, ly as i32, [255, 200, 200, (100 - i * 25) as u8]);
+                        let lx = glove_x + dir as f32 * (10.0 + i as f32 * 4.0);
+                        draw_line(img, lx as i32, (arm_cy - 6.0) as i32, lx as i32, (arm_cy + 6.0) as i32, [255, 200, 200, (100 - i * 25) as u8]);
                     }
                 }
             }
@@ -424,6 +442,8 @@ impl PartDef for MechanicalType {
                 let box_c = [180, 50, 180, 255];
                 fill_rect(img, ix, iy + 12, w as i32, h as i32 - 12, box_c);
                 draw_line(img, ix, iy + 12, ix + w as i32, iy + 12, [200, 80, 200, 255]);
+                let dir: i32 = if props.flipped { -1 } else { 1 };
+                let crank_side = if props.flipped { ix - 6 } else { ix + w as i32 + 2 };
                 match props.current_state {
                     1 => {
                         // Winding — lid vibrating
@@ -431,23 +451,22 @@ impl PartDef for MechanicalType {
                         fill_rect(img, ix + vib, iy + 10, w as i32, 3, [200, 80, 200, 255]);
                         // Crank handle
                         let crank_a = frame as f32 * 0.15;
-                        let cx = ix + w as i32 + 2;
-                        let cy = iy + 20;
-                        blend_pixel(img, cx + (crank_a.cos() * 4.0) as i32, cy + (crank_a.sin() * 4.0) as i32, [120, 120, 130, 255]);
+                        blend_pixel(img, crank_side + (crank_a.cos() * 4.0) as i32, iy + 20 + (crank_a.sin() * 4.0) as i32, [120, 120, 130, 255]);
                     }
                     2 => {
-                        // Open — spring popping out with figure
-                        // Lid flipped open
-                        fill_rect(img, ix, iy + 8, w as i32, 3, [200, 80, 200, 200]);
-                        // Spring
+                        // Open — spring popping out with figure, catapults in facing direction
+                        let lid_x = if props.flipped { ix - w as i32 / 2 } else { ix + w as i32 / 2 };
+                        fill_rect(img, lid_x, iy + 8, w as i32 / 2, 3, [200, 80, 200, 200]);
+                        // Spring — angled in catapult direction
+                        let fig_x = x + w / 2.0 + dir as f32 * 6.0;
                         for sy in 0..4 {
                             let wobble = (sy as f32 * 2.0).sin() * 3.0;
-                            blend_pixel(img, (x + w / 2.0 + wobble) as i32, iy + 8 - sy * 2, [160, 160, 170, 255]);
+                            blend_pixel(img, (fig_x + wobble) as i32, iy + 8 - sy * 2, [160, 160, 170, 255]);
                         }
                         // Figure head
-                        fill_circle(img, x + w / 2.0, y + 2.0, 4.0, [255, 220, 100, 255]);
-                        blend_pixel(img, ix + (w as i32 / 2) - 1, iy + 1, [40, 40, 40, 255]);
-                        blend_pixel(img, ix + (w as i32 / 2) + 1, iy + 1, [40, 40, 40, 255]);
+                        fill_circle(img, fig_x, y + 2.0, 4.0, [255, 220, 100, 255]);
+                        blend_pixel(img, fig_x as i32 - 1, iy + 1, [40, 40, 40, 255]);
+                        blend_pixel(img, fig_x as i32 + 1, iy + 1, [40, 40, 40, 255]);
                     }
                     _ => {
                         // Closed lid
@@ -497,9 +516,11 @@ impl PartDef for MechanicalType {
             }
             MechanicalType::MouseExerciseWheel => {
                 // State 0=Idle, 1=Spinning
+                // Flip changes mouse direction and spin direction
+                let spin_dir = if props.flipped { -1.0_f32 } else { 1.0 };
                 let cx = x + 20.0;
                 let cy = y + 20.0;
-                let wheel_angle = if props.current_state == 1 { frame as f32 * 0.1 } else { 0.0 };
+                let wheel_angle = if props.current_state == 1 { frame as f32 * 0.1 * spin_dir } else { 0.0 };
                 // Wire wheel
                 fill_circle(img, cx, cy, 16.0, [ic[0], ic[1], ic[2], 120]);
                 for i in 0..8 {
@@ -509,13 +530,14 @@ impl PartDef for MechanicalType {
                     draw_line(img, cx as i32, cy as i32, ex as i32, ey as i32, [ic[0], ic[1], ic[2], 180]);
                 }
                 fill_circle(img, cx, cy, 3.0, [80, 80, 90, 255]);
-                // Mouse inside
+                // Mouse inside — faces left or right based on flip
                 if props.current_state == 1 {
                     let mx = cx + (wheel_angle + 1.0).cos() * 10.0;
                     let my = cy + (wheel_angle + 1.0).sin() * 10.0;
                     fill_circle(img, mx, my, 3.0, [160, 160, 160, 255]);
                 } else {
-                    fill_circle(img, cx - 6.0, cy + 8.0, 3.0, [160, 160, 160, 255]);
+                    let mouse_x = if props.flipped { cx + 6.0 } else { cx - 6.0 };
+                    fill_circle(img, mouse_x, cy + 8.0, 3.0, [160, 160, 160, 255]);
                 }
             }
             MechanicalType::HedgeTrimmers => {
@@ -538,8 +560,42 @@ impl PartDef for MechanicalType {
                 fill_circle(img, cx, cy, 2.0, [150, 150, 160, 255]);
                 fill_rect(img, ix, iy + 3, 8, 6, [180, 180, 190, 255]);
             }
+            MechanicalType::Bellows => {
+                // State 0=Open, 1=Compressed, 2=Spent
+                // Flippable: air blows left or right
+                let dir: i32 = if props.flipped { -1 } else { 1 };
+                let compress = match props.current_state {
+                    1 => 8, // compressed
+                    2 => 12, // fully spent
+                    _ => 0, // open
+                };
+                // Accordion body — narrows when compressed
+                let body_w = (w as i32 - 8 - compress).max(4);
+                let body_x = if props.flipped { ix + w as i32 - body_w - 4 } else { ix + 4 };
+                fill_rect(img, body_x, iy + 4, body_w, h as i32 - 8, [ic[0], ic[1], ic[2], 255]);
+                // Accordion folds
+                for fold in (0..body_w).step_by(4) {
+                    draw_line(img, body_x + fold, iy + 4, body_x + fold, iy + h as i32 - 4,
+                        [ic[0].saturating_sub(30), ic[1].saturating_sub(30), ic[2].saturating_sub(30), 200]);
+                }
+                // Handle/top plate
+                let handle_x = if props.flipped { body_x + body_w } else { body_x - 4 };
+                fill_rect(img, handle_x, iy + 2, 6, h as i32 - 4, [100, 70, 40, 255]);
+                // Nozzle
+                let nozzle_x = if props.flipped { ix } else { ix + w as i32 - 4 };
+                fill_rect(img, nozzle_x, iy + 8, 4, 8, [120, 120, 130, 255]);
+                // Air burst when compressed
+                if props.current_state == 1 {
+                    let air_x = if props.flipped { ix - 4 } else { ix + w as i32 };
+                    for i in 0..4 {
+                        let ax = air_x + dir * (i * 4 + ((frame as i32 * 2) % 4));
+                        let alpha = (180 - i * 40) as u8;
+                        draw_line(img, ax, iy + 8, ax, iy + 16, [200, 220, 255, alpha]);
+                    }
+                }
+            }
             _ => {
-                // Pulley, Belt, TransRotoMatic, RotoTransConverter, TipsyTrailer, Tack
+                // Pulley, Belt, TransRotoMatic, RotoTransConverter, TipsyTrailer
                 fill_rect(img, ix, iy, w as i32, h as i32, [ic[0], ic[1], ic[2], 200]);
                 draw_line(img, ix, iy, ix + w as i32 - 1, iy, [ic[0].saturating_add(30), ic[1].saturating_add(30), ic[2].saturating_add(30), 255]);
                 draw_line(img, ix, iy + h as i32 - 1, ix + w as i32 - 1, iy + h as i32 - 1, [ic[0].saturating_sub(30), ic[1].saturating_sub(30), ic[2].saturating_sub(30), 255]);
@@ -582,7 +638,7 @@ impl PartDef for MechanicalType {
     }
 
     fn is_flippable(&self) -> bool {
-        matches!(self, MechanicalType::Windmill | MechanicalType::BoxingGlove)
+        matches!(self, MechanicalType::Windmill | MechanicalType::BoxingGlove | MechanicalType::JackInTheBox | MechanicalType::MouseExerciseWheel | MechanicalType::Bellows)
     }
 
     fn requires_power(&self) -> bool {
@@ -594,6 +650,6 @@ impl PartDef for MechanicalType {
     }
 
     fn can_be_ramp(&self) -> bool {
-        matches!(self, MechanicalType::TeeterTotter | MechanicalType::PinballBumper | MechanicalType::VacuumCleaner)
+        matches!(self, MechanicalType::TeeterTotter | MechanicalType::PinballBumper | MechanicalType::VacuumCleaner | MechanicalType::Bellows)
     }
 }
