@@ -48,8 +48,7 @@ impl TextSettings {
 
     pub fn label(&self) -> String {
         if self.halfblock {
-            let dc = if self.dual_color { "" } else { " (always dual)" };
-            format!("HalfBlock{}", dc)
+            return "HalfBlock".to_string();
         } else {
             let mut parts = vec!["Braille"];
             if self.dual_color { parts.push("+DualColor"); }

@@ -550,6 +550,11 @@ fn render_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, game: &mu
 
 // ── Main Loop ───────────────────────────────────────────────────
 
+fn cleanup_terminal() {
+    let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
+    let _ = terminal::disable_raw_mode();
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let render_mode = if args.iter().any(|a| a == "--pixel") {
@@ -563,6 +568,13 @@ fn main() -> Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
+
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        cleanup_terminal();
+        original_hook(info);
+    }));
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -593,7 +605,8 @@ fn main() -> Result<()> {
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('c') if key.code == KeyCode::Char('q') || key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
 
                     // ── Run / Stop ──
                     KeyCode::Char(' ') => match game.mode {
@@ -736,7 +749,6 @@ fn main() -> Result<()> {
         }
     }
 
-    execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
-    terminal::disable_raw_mode()?;
+    cleanup_terminal();
     Ok(())
 }

@@ -115,8 +115,11 @@ impl World {
                 y: inst.y,
                 vx: inst.vx,
                 vy: inst.vy,
+                width: inst.props.width,
+                height: inst.props.height,
                 state: inst.props.current_state,
                 flipped: inst.props.flipped,
+                values: inst.props.values.clone(),
             })
             .collect()
     }
@@ -129,25 +132,15 @@ impl World {
                 inst.y = snap.y;
                 inst.vx = snap.vx;
                 inst.vy = snap.vy;
+                inst.props.width = snap.width;
+                inst.props.height = snap.height;
                 inst.props.current_state = snap.state;
                 inst.props.flipped = snap.flipped;
+                inst.props.values = snap.values.clone();
             }
         }
     }
 
-    /// Check if an instance has exited the visible world bounds.
-    pub fn is_off_screen(&self, id: InstanceId) -> bool {
-        if let Some(inst) = self.get(id) {
-            let cw = crate::constants::CANVAS_W as f32;
-            let ch = crate::constants::CANVAS_H as f32;
-            inst.x + inst.props.width < -50.0
-                || inst.x > cw + 50.0
-                || inst.y + inst.props.height < -50.0
-                || inst.y > ch + 50.0
-        } else {
-            true // removed = off screen
-        }
-    }
 }
 
 /// Saved position/state for simulation reset.
@@ -158,6 +151,9 @@ pub struct InstanceSnapshot {
     pub y: f32,
     pub vx: f32,
     pub vy: f32,
+    pub width: f32,
+    pub height: f32,
     pub state: usize,
     pub flipped: bool,
+    pub values: HashMap<String, f32>,
 }
