@@ -1,0 +1,29 @@
+(
+    title: "Puzzle #9: Tower Topple",
+    goal: "Knock the 5-ball off the right edge.",
+    parts: [
+        // Floor
+        (kind: "BrickWall", x: 0, y: 340, width: Some(640), height: Some(20)),
+        // Tower base — a tall ledge on the right
+        (kind: "CinderBlockWall", x: 480, y: 180, width: Some(120), height: Some(12)),
+        (kind: "CinderBlockWall", x: 480, y: 180, width: Some(12), height: Some(160)),
+        // A shelf on the left for launching
+        (kind: "WoodenWall", x: 40, y: 240, width: Some(120), height: Some(12)),
+        // Target: 5-ball perched on the tower
+        (kind: "PoolBall", x: 540, y: 168, label: Some("fiveball"), props: {"surface_number": 5.0}),
+        // Guard balls stacked next to the target
+        (kind: "PoolBall", x: 520, y: 168, props: {"surface_number": 1.0}),
+        (kind: "PoolBall", x: 560, y: 168, props: {"surface_number": 3.0}),
+        // Mid-air obstacle
+        (kind: "YellowBrickWall", x: 280, y: 200, width: Some(16), height: Some(80)),
+    ],
+    win_conditions: [
+        ExitedWorld(label: "fiveball", edge: "Right"),
+    ],
+    bin: [
+        (kind: "Cannonball", quantity: 1),
+        (kind: "BowlingBall", quantity: 1),
+        (kind: "SuperBall", quantity: 2),
+        (kind: "TennisBall", quantity: 1),
+    ],
+)
