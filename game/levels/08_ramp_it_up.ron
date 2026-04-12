@@ -1,0 +1,26 @@
+(
+    title: "Puzzle #8: Ramp It Up",
+    goal: "Knock the 2-ball off the screen.",
+    parts: [
+        // Floor
+        (kind: "BrickWall", x: 0, y: 340, width: Some(640), height: Some(20)),
+        // Pit walls trapping the target on the right
+        (kind: "BrickWall", x: 430, y: 280, width: Some(16), height: Some(60)),
+        (kind: "BrickWall", x: 560, y: 280, width: Some(16), height: Some(60)),
+        // Overhead ledge the player drops from
+        (kind: "WoodenWall", x: 60, y: 120, width: Some(140), height: Some(12)),
+        // Target: floating 2-ball pinned in the pit
+        (kind: "PoolBall", x: 495, y: 310, label: Some("twoball"), props: {"surface_number": 2.0}),
+        // Decorative blockers
+        (kind: "PoolBall", x: 250, y: 180, props: {"surface_number": 4.0}),
+        (kind: "PoolBall", x: 340, y: 220, props: {"surface_number": 6.0}),
+    ],
+    win_conditions: [
+        ExitedWorld(label: "twoball", edge: "Any"),
+    ],
+    bin: [
+        (kind: "BrickIncline", quantity: 1),
+        (kind: "BowlingBall", quantity: 1),
+        (kind: "SuperBall", quantity: 2),
+    ],
+)
